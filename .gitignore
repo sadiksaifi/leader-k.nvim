@@ -1,0 +1,23 @@
+# Neovim help tags and editor files
+doc/tags
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local secrets and generated artifacts
+.env
+.env.*
+!.env.example
+luac.out
+.luacov.*
+coverage/
+
+# ai slop
+
+.snap
+.codex
+.opencode
+.claude
+.pi
+.agents

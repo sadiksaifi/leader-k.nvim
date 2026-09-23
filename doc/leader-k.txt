@@ -1,0 +1,103 @@
+*leader-k.txt*  Inline AI edits                                      *leader-k*
+
+==============================================================================
+REQUIREMENTS                                        *leader-k-requirements*
+
+  Neovim 0.12+ with LuaJIT  https://neovim.io/
+  libcurl shared library   https://curl.se/libcurl/
+
+==============================================================================
+USE                                                          *leader-k-use*
+
+Map <leader>k to require("leader-k").open(). In Visual mode it edits the
+selected lines; in Normal mode it edits the current line. Enter submits the
+instruction. Accepting applies the proposal to the buffer.
+
+During review: Enter accepts, Backspace rejects, <leader>k refines, and
+<C-c> stops a running request. A changed selection cannot be accepted until
+that edit is undone. Errors appear in |:messages|.
+
+                                                            *:LeaderK*
+:[range]LeaderK [instruction]
+    Edit the range (default: current line). An instruction skips the prompt.
+
+==============================================================================
+SETUP                                                      *leader-k-setup*
+
+>lua
+    ---@type leader_k.Config
+    local opts = {
+      base_url = "https://openrouter.ai/api/v1", -- Required API root.
+      model = "openai/gpt-6-luna",             -- Required model ID.
+      api_key = { env = "OPENROUTER_API_KEY" },   -- Optional key source.
+      params = { -- Optional; omit to use the model's default.
+        -- "none" (off), "low", "medium", "high", "xhigh", "max"
+        reasoning = { effort = "none" },
+      },
+    }
+    require("leader-k").setup(opts)
+<
+leader-k uses OpenAI-compatible streaming Chat Completions. Plain http://
+works on localhost, 127.0.0.1, or [::1].
+
+Official endpoint documentation:
+  OpenRouter  https://openrouter.ai/docs/quickstart
+  OpenAI     https://developers.openai.com/api/reference/resources/chat
+  Anthropic  https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk
+  Groq       https://console.groq.com/docs/openai
+  Ollama     https://docs.ollama.com/api/openai-compatibility
+  llama.cpp  https://github.com/ggml-org/llama.cpp/tree/master/tools/server
+
+`api_key` is optional: use a literal string or { env = "NAME" }. Environment
+references are resolved on each request from Neovim's environment. For
+keyless endpoints, leave `api_key` unset. Authentication errors appear in
+|:messages|.
+
+Optional fields:
+  params          Extra Chat Completions request fields. Check model support.
+                  Leave `model` and `messages` to the plugin; streaming stays
+                  enabled. A truncated response is rejected.
+  context_bytes   Context sent on each side of the selection. Default 50000.
+  timeout_ms      Request limit. Default 180000.
+  libcurl         Path to libcurl if automatic loading fails.
+  keys            Review key mappings; see |leader-k-keys|.
+
+Run |:checkhealth| leader-k to inspect your setup.
+
+==============================================================================
+KEYS                                                        *leader-k-keys*
+
+  keys.accept  <CR>       Apply the proposal.
+  keys.reject  <BS>       Discard the proposal or stop a request.
+  keys.cancel  <C-c>      Stop a request. A refine returns to its proposal.
+  keys.refine  <leader>k  Request a follow-up edit; empty input regenerates.
+
+In the prompt: Enter sends; Up/Down recall instructions; <C-c> cancels.
+Esc enters Normal mode, where Esc or q cancels.
+
+==============================================================================
+TRANSPORT                                               *leader-k-transport*
+
+Requests run through libcurl in-process. TLS is verified and redirects are
+not followed. If configured, the key is sent as a Bearer token and is not
+logged. A literal key remains in your config file. Each request includes
+the selected lines, surrounding code (up to `context_bytes` on each side),
+file metadata, and diagnostics on the selection.
+
+==============================================================================
+HIGHLIGHTS                                             *leader-k-highlights*
+
+  LeaderKAdd  LeaderKAddText  LeaderKDelete  LeaderKDeleteText
+  LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
+  LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
+  LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
+  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash
+
+==============================================================================
+LIMITS                                                     *leader-k-limits*
+
+Selections edit whole lines. One session runs per buffer; sessions in other
+buffers can run in parallel. Request context comes from the current file.
+Tree-sitter syntax colors on proposed lines require a parser for the filetype.
+
+ vim:tw=78:ts=8:ft=help:norl:

@@ -1,0 +1,743 @@
+-- Headless tests against a local fake server, which this script starts.
+--   nvim --headless -u NONE -l tests/run.lua
+-- Set LEADER_K_LIVE=1 to run optional requests against the explicitly
+-- configured LEADER_K_BASE_URL, LEADER_K_MODEL and LEADER_K_API_KEY.
+
+local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+vim.opt.rtp:prepend(root)
+vim.cmd("runtime plugin/leader-k.lua")
+vim.o.swapfile = false
+vim.g.mapleader = " "
+
+local lk = require("leader-k")
+local config = require("leader-k.config")
+local session = require("leader-k.session")
+local render = require("leader-k.render")
+local http = require("leader-k.http")
+
+local BASE_URL = "http://127.0.0.1:8765/v1"
+local LOG = "/tmp/leader-k-test-request.json"
+
+-- The server is test tooling; the plugin itself never spawns a process.
+local server = vim.system({ "python3", root .. "/tests/fake_server.py" })
+local up = vim.wait(5000, function()
+  local tcp = vim.uv.new_tcp()
+  local ok = false
+  tcp:connect("127.0.0.1", 8765, function(err)
+    ok = not err
+    tcp:close()
+  end)
+  vim.wait(100, function()
+    return ok
+  end, 10)
+  return ok
+end, 50)
+assert(up, "fake server did not start")
+
+local function use(model, extra)
+  lk.setup(vim.tbl_extend("force", {
+    base_url = BASE_URL,
+    model = model,
+    api_key = "sk-test-123",
+  }, extra or {}))
+end
+
+local passed, failed = 0, 0
+local function test(name, fn)
+  vim.cmd("enew!")
+  vim.bo.buftype = "nofile"
+  local ok, err = xpcall(fn, debug.traceback)
+  local s = session.get(0)
+  if s then
+    s:destroy()
+  end
+  if ok then
+    passed = passed + 1
+    print("ok   " .. name)
+  else
+    failed = failed + 1
+    print("FAIL " .. name .. "\n" .. err)
+  end
+end
+
+local function eq(a, b, msg)
+  if not vim.deep_equal(a, b) then
+    error(("%s\n  expected: %s\n  got:      %s"):format(msg or "not equal", vim.inspect(b), vim.inspect(a)), 2)
+  end
+end
+
+local function truthy(v, msg)
+  if not v then
+    error(msg or "expected truthy", 2)
+  end
+end
+
+local function lines(t)
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, t)
+end
+
+local function buf_lines()
+  return vim.api.nvim_buf_get_lines(0, 0, -1, false)
+end
+
+local function wait_state(s, want, ms)
+  vim.wait(ms or 10000, function()
+    return s.state == want or s.state == "closed"
+  end, 10)
+  eq(s.state, want, "state (error: " .. tostring(s.error) .. ")")
+end
+
+-- Errors go to the message area. Capture them instead of printing.
+local echoed = {}
+local real_echo = vim.api.nvim_echo
+vim.api.nvim_echo = function(chunks, history, opts)
+  if opts and opts.err then
+    local text = {}
+    for _, c in ipairs(chunks) do
+      text[#text + 1] = c[1]
+    end
+    echoed[#echoed + 1] = table.concat(text)
+    return
+  end
+  return real_echo(chunks, history, opts)
+end
+
+local function marks(buf)
+  return vim.api.nvim_buf_get_extmarks(buf or 0, render.ns, 0, -1, { details = true })
+end
+
+---Waits for a session to fail and checks that it left nothing behind.
+---@return string message
+local function wait_error(s, ms)
+  vim.wait(ms or 10000, function()
+    return s.state == "closed"
+  end, 10)
+  eq(s.state, "closed", "session closed after an error")
+  truthy(s.error, "error recorded")
+  eq(echoed[#echoed], "leader-k: " .. s.error, "error echoed to the message area")
+  eq(session.get(s.buf), nil, "session gone")
+  eq(#marks(s.buf), 0, "no inline decorations left")
+  return s.error
+end
+
+local function undo_break()
+  vim.o.undolevels = vim.o.undolevels
+end
+
+local SAMPLE = {
+  "local M = {}",
+  "",
+  "function M.total(items)",
+  "  local sum = 0",
+  "  for i = 1, #items do",
+  "    sum = sum + items[i].price * items[i].qty",
+  "  end",
+  "  return sum",
+  "end",
+  "",
+  "return M",
+}
+
+test("streams, shows pending lines, then reviews", function()
+  use("slow")
+  vim.bo.filetype = "lua"
+  lines(SAMPLE)
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  eq(s.state, "running")
+  local saw_pending, saw_writing = false, false
+  vim.wait(10000, function()
+    if s.phase == "writing" then
+      saw_writing = true
+      for _, m in ipairs(marks()) do
+        if m[4].hl_group == "LeaderKPending" then
+          saw_pending = true
+        end
+      end
+    end
+    return s.state ~= "running"
+  end, 5)
+  truthy(saw_writing, "never entered the writing phase")
+  truthy(saw_pending, "no pending lines while streaming")
+  eq(s.state, "review")
+  eq(s.proposal[1], "local function total(items)")
+  eq(#s.proposal, 7)
+  truthy(s.added > 0 and s.removed > 0)
+  eq(buf_lines(), SAMPLE, "buffer untouched before accept")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(req.body.stream, true)
+  eq(req.body.model, "slow")
+  truthy(req.body.messages[2].content:find("<selection>\nfunction M.total", 1, true), "selection in prompt")
+  truthy(req.body.messages[2].content:find("Instruction: use ipairs", 1, true), "instruction in prompt")
+  eq(req.auth_present, true, "explicit key is sent as a bearer token")
+end)
+
+test("accept applies as one undo step and flashes", function()
+  use("slow")
+  lines(SAMPLE)
+  undo_break()
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  s:accept()
+  eq(session.get(0), nil)
+  eq(buf_lines()[3], "local function total(items)")
+  eq(#buf_lines(), 11)
+  eq(#marks(), 0, "decorations cleared")
+  vim.cmd("undo")
+  eq(buf_lines(), SAMPLE, "undo restores the selection")
+end)
+
+test("reject leaves the buffer alone and restores shadowed keys", function()
+  use("fast")
+  lines(SAMPLE)
+  vim.keymap.set("n", "<CR>", "<Cmd>let g:lk_cr = 1<CR>", { buffer = 0 })
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(vim.fn.maparg("<CR>", "n", false, true).desc, "leader-k: accept")
+  s:destroy()
+  eq(buf_lines(), SAMPLE)
+  eq(#marks(), 0)
+  eq(vim.fn.maparg("<CR>", "n"), "<Cmd>let g:lk_cr = 1<CR>", "buffer map restored")
+  eq(vim.fn.maparg("<BS>", "n"), "", "reject map removed")
+end)
+
+test("Enter accepts only while the proposal is visible", function()
+  use("fast")
+  local long = {}
+  for i = 1, 300 do
+    long[i] = "x" .. i
+  end
+  lines(long)
+  lk.edit(1, 2, "change")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  vim.cmd("normal! 250Gzz")
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  eq(s.state, "review", "Enter off-screen is a normal Enter")
+  eq(vim.fn.line("."), 251)
+  vim.cmd("normal! 1G")
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  eq(session.get(0), nil, "Enter on-screen accepts")
+  eq(buf_lines()[1], "local function total(items)")
+end)
+
+test("HTTP 401 goes to the message area", function()
+  use("err401")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("HTTP 401", 1, true), s.error)
+  truthy(s.error:find("User not found", 1, true), s.error)
+  truthy(s.error:find("check the API key", 1, true), s.error)
+  eq(buf_lines(), SAMPLE)
+end)
+
+test("HTTP 402 explains credits", function()
+  use("err402")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("HTTP 402: Insufficient credits", 1, true), s.error)
+end)
+
+test("mid-stream provider error", function()
+  use("midstream")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("Provider disconnected", 1, true), s.error)
+end)
+
+test("stream cut without a finish reason", function()
+  use("cut")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("ended before", 1, true), s.error)
+end)
+
+test("model refusal via <error>", function()
+  use("refuse")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("declined: That needs changes outside", 1, true), s.error)
+end)
+
+test("output limit is an error, not a proposal", function()
+  use("length")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("output limit", 1, true), s.error)
+end)
+
+test("fenced reply without tags keeps indentation", function()
+  use("fence")
+  lines({ "local function f()", "  return 1", "end" })
+  lk.edit(2, 2, "return 42")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(s.proposal, { "  return 42" })
+end)
+
+test("restores a dropped base indent", function()
+  use("noindent")
+  lines({ "function f(x)", "  if not x then", "    return 0", "  end", "end" })
+  lk.edit(2, 4, "flip")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(s.proposal, { "  if x then", "    return 1", "  end" })
+end)
+
+test("empty code block proposes deleting the selection", function()
+  use("empty")
+  lines({ "a", "b", "c" })
+  lk.edit(2, 2, "delete")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(s.proposal, {})
+  eq(s.removed, 1)
+  s:accept()
+  eq(buf_lines(), { "a", "c" })
+end)
+
+test("identical reply shows no changes and accept does nothing", function()
+  use("same")
+  lines(SAMPLE)
+  vim.bo.modified = false
+  lk.edit(3, 5, "nothing")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq({ s.added, s.removed }, { 0, 0 })
+  s:accept()
+  eq(vim.bo.modified, false)
+  eq(buf_lines(), SAMPLE)
+end)
+
+test("CRLF event stream", function()
+  use("crlf")
+  lines({ "x" })
+  lk.edit(1, 1, "y")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(s.proposal, { "local y = 2" })
+end)
+
+test("reasoning shows the thinking phase", function()
+  use("think")
+  lines(SAMPLE)
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  local saw = false
+  vim.wait(10000, function()
+    saw = saw or s.phase == "thinking"
+    return s.state ~= "running"
+  end, 5)
+  truthy(saw, "no thinking phase")
+  eq(s.state, "review")
+end)
+
+test("cancel stops the transfer", function()
+  use("hang")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  vim.wait(300)
+  eq(s.state, "running")
+  eq(http.active_count(), 1)
+  vim.api.nvim_feedkeys(vim.keycode("<C-c>"), "x", false)
+  eq(session.get(0), nil)
+  eq(http.active_count(), 0)
+  eq(#marks(), 0)
+  eq(vim.bo.busy, 0)
+end)
+
+test("editing the selection blocks accept until undone", function()
+  use("fast")
+  lines(SAMPLE)
+  undo_break()
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  vim.api.nvim_buf_set_lines(0, 3, 4, false, { "  local sum = 1" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0 })
+  eq(s.stale, true)
+  s:accept()
+  eq(s.state, "review", "stale accept refused")
+  eq(buf_lines()[4], "  local sum = 1")
+  vim.cmd("undo")
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0 })
+  eq(s.stale, false)
+  s:accept()
+  eq(buf_lines()[3], "local function total(items)")
+end)
+
+test("edits outside the selection shift it without going stale", function()
+  use("slow")
+  lines(SAMPLE)
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  vim.api.nvim_buf_set_lines(0, 0, 0, false, { "-- header", "" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0 })
+  wait_state(s, "review")
+  eq(s.stale, false)
+  s:accept()
+  eq(buf_lines()[5], "local function total(items)")
+  eq(buf_lines()[1], "-- header")
+end)
+
+test("refine sends the conversation", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  s:refine()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "add a doc comment" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  eq(#s.turns, 2)
+  wait_state(s, "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(#req.body.messages, 4)
+  eq(req.body.messages[3].role, "assistant")
+  truthy(req.body.messages[3].content:find("<code>\nlocal function total", 1, true))
+  truthy(req.body.messages[4].content:find("add a doc comment", 1, true))
+end)
+
+test("a failed refine keeps the previous proposal", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local proposal = s.proposal
+  use("err401")
+  s:refine()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "add a doc comment" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  vim.wait(10000, function()
+    return s.state ~= "running"
+  end, 10)
+  eq(s.state, "review")
+  eq(s.proposal, proposal)
+  eq(#s.turns, 1)
+  eq(s.instruction, "use ipairs")
+  eq(echoed[#echoed], "leader-k: " .. s.error)
+  truthy(s.error:find("HTTP 401", 1, true), s.error)
+  s:accept()
+  eq(buf_lines()[3], "local function total(items)")
+end)
+
+test("stopping a refine keeps the previous proposal", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.edit(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local proposal = s.proposal
+  use("hang")
+  s:refine()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "more" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  eq(s.state, "running")
+  s:stop()
+  eq(s.state, "review")
+  eq(s.proposal, proposal)
+  eq(#s.turns, 1)
+end)
+
+test("whole file is sent; large files are cut at whole lines", function()
+  use("fast")
+  local big = {}
+  for i = 1, 3000 do
+    big[i] = ("local v%d = %d -- %s"):format(i, i, string.rep("x", 20))
+  end
+  lines(big)
+  lk.edit(1500, 1501, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local user = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n")).body.messages[2].content
+  truthy(user:find("3000 lines. The selection is lines 1500-1501.", 1, true), user:sub(1, 200))
+  eq(#s.ctx.before + s.ctx.omitted_before, 1499)
+  eq(#s.ctx.after + s.ctx.omitted_after, 1499)
+  truthy(s.ctx.omitted_before > 0 and s.ctx.omitted_after > 0, "cut on both sides")
+  local bytes = #table.concat(s.ctx.before, "\n") + 1
+  truthy(bytes <= 50000 and bytes > 49000, "before size " .. bytes)
+  eq(s.ctx.before[#s.ctx.before], big[1499], "nearest line kept")
+  truthy(user:find(("[lines 1-%d omitted]"):format(s.ctx.omitted_before), 1, true), "omission noted")
+  truthy(user:find("[lines " .. (3000 - s.ctx.omitted_after + 1) .. "-3000 omitted]", 1, true), "tail omission noted")
+  s:destroy()
+
+  lines(SAMPLE)
+  lk.edit(3, 9, "x")
+  s = assert(session.get(0))
+  wait_state(s, "review")
+  eq(s.ctx.before, { "local M = {}", "" })
+  eq(s.ctx.after, { "", "return M" })
+  user = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n")).body.messages[2].content
+  truthy(not user:find("omitted", 1, true), "small file sent whole")
+end)
+
+test("prompt: Esc then q cancels without a request", function()
+  use("fast")
+  lines(SAMPLE)
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_get_current_buf()
+  lk.edit(3, 4)
+  local s = assert(session.get(buf))
+  eq(s.state, "prompt")
+  truthy(vim.api.nvim_get_current_win() ~= win, "prompt float focused")
+  truthy(#marks(buf) > 0, "selection highlighted")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "draft" })
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>q"), "x", false)
+  eq(vim.api.nvim_get_current_win(), win)
+  eq(session.get(buf), nil)
+  eq(#marks(buf), 0)
+end)
+
+test("prompt: Esc on an empty prompt cancels at once", function()
+  use("fast")
+  lines(SAMPLE)
+  local buf = vim.api.nvim_get_current_buf()
+  lk.edit(3, 4)
+  truthy(session.get(buf))
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "x", false)
+  vim.wait(50)
+  eq(session.get(buf), nil)
+end)
+
+test("SSE parser: split chunks, comments, multi-line data", function()
+  local got = {}
+  local feed = require("leader-k.sse").parser(function(d)
+    got[#got + 1] = d
+  end)
+  feed(": OPENROUTER PROCESSING\n\nda")
+  feed("ta: one\ndata: two\n\ndata:three\r\n\r\n")
+  eq(got, { "one\ntwo", "three" })
+end)
+
+test("extract: partial closing tag never shows", function()
+  local p = require("leader-k.prompt")
+  eq(p.extract("<code>\nlocal a = 1\n</co", false).text, "local a = 1\n")
+  eq(p.extract("thinking out loud", false).kind, "pending")
+  eq(p.extract("<code>\n```lua\nx()\n```\n</code>", true).text, "x()")
+end)
+
+test("visual <leader>k opens the prompt for the selected lines", function()
+  use("fast")
+  lines(SAMPLE)
+  vim.keymap.set("x", "<leader>k", lk.open)
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_feedkeys("4GVj" .. vim.keycode("<Space>") .. "k", "x", false)
+  local s = assert(session.get(buf))
+  local r0, r1 = render.region(s)
+  eq({ r0, r1 }, { 3, 4 })
+  vim.api.nvim_feedkeys("add logging" .. vim.keycode("<CR>"), "x", false)
+  wait_state(s, "review")
+end)
+
+test("wiping the buffer mid-request cancels cleanly", function()
+  use("hang")
+  lines(SAMPLE)
+  local buf = vim.api.nvim_get_current_buf()
+  lk.edit(1, 1, "x")
+  vim.wait(200)
+  vim.cmd("bwipeout! " .. buf)
+  eq(session.get(buf), nil)
+  eq(http.active_count(), 0)
+end)
+
+test("two buffers stream at the same time", function()
+  use("slow")
+  lines(SAMPLE)
+  lk.edit(3, 9, "x")
+  local a = assert(session.get(0))
+  vim.cmd("enew!")
+  vim.bo.buftype = "nofile"
+  lines(SAMPLE)
+  lk.edit(3, 9, "y")
+  local b = assert(session.get(0))
+  eq(http.active_count(), 2)
+  wait_state(a, "review")
+  wait_state(b, "review")
+  a:destroy()
+end)
+
+test("header is revealed for a selection on the first line", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  truthy(vim.fn.winsaveview().topfill >= 1, "topfill shows the header")
+end)
+
+test("diagnostics in the selection are sent", function()
+  use("fast")
+  lines(SAMPLE)
+  local ns = vim.api.nvim_create_namespace("lk-test")
+  vim.diagnostic.set(
+    ns,
+    0,
+    { { lnum = 5, col = 0, message = "undefined field `qty`", severity = vim.diagnostic.severity.WARN } }
+  )
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  truthy(req.body.messages[2].content:find("line 4 of the selection: warn: undefined field `qty`", 1, true))
+end)
+
+test("params merge into the body and cannot turn streaming off", function()
+  use("fast", { params = { temperature = 0.1, stream = false, reasoning = { effort = "none" } } })
+  lines(SAMPLE)
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(req.body.temperature, 0.1)
+  eq(req.body.stream, true)
+  eq(req.body.reasoning, { effort = "none" })
+end)
+
+test("literal key and base URL produce a chat completion request", function()
+  use("fast", { base_url = BASE_URL .. "/" })
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(req.auth_present, true)
+  eq(req.auth_prefix, "Bearer ")
+  eq(config.endpoint().url, BASE_URL .. "/chat/completions")
+  use("fast", { api_key = "LEADER_K_TEST_KEY" })
+  eq(config.endpoint().key, "LEADER_K_TEST_KEY", "plain strings are literal keys, never variable names")
+end)
+
+test("key from the named environment variable is read for each request", function()
+  local name = "LEADER_K_TEST_KEY"
+  local saved = vim.env[name]
+  vim.env[name] = "sk-from-env"
+  use("fast", { api_key = { env = name } })
+  eq(config.endpoint().key, "sk-from-env")
+  vim.env[name] = "sk-rotated"
+  eq(config.endpoint().key, "sk-rotated")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  wait_state(assert(session.get(0)), "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(req.auth_present, true)
+  vim.env[name] = saved
+end)
+
+test("keyless endpoints send no Authorization header", function()
+  lk.setup({ base_url = BASE_URL, model = "fast" })
+  local ep, err = config.endpoint()
+  truthy(ep, err)
+  eq(ep.key, nil)
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  wait_state(assert(session.get(0)), "review")
+  local req = vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+  eq(req.auth_present, false)
+end)
+
+test("a keyless request surfaces authentication errors", function()
+  lk.setup({ base_url = BASE_URL, model = "err401" })
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("HTTP 401", 1, true), s.error)
+  truthy(s.error:find("set `api_key`", 1, true), s.error)
+end)
+
+test("missing configuration and environment keys stop requests", function()
+  lk.setup({})
+  local _, err = config.endpoint()
+  truthy(err:find("`base_url`", 1, true), err)
+  lk.open()
+  eq(session.get(0), nil, "no prompt opens without mandatory configuration")
+  truthy(echoed[#echoed]:find("`base_url`", 1, true), echoed[#echoed])
+  lk.setup({ base_url = BASE_URL })
+  _, err = config.endpoint()
+  truthy(err:find("`model`", 1, true), err)
+  use("fast", { api_key = { env = "LEADER_K_MISSING_TEST_KEY" } })
+  local saved = vim.env.LEADER_K_MISSING_TEST_KEY
+  vim.env.LEADER_K_MISSING_TEST_KEY = nil
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  eq(session.get(0), nil)
+  truthy(echoed[#echoed]:find("$LEADER_K_MISSING_TEST_KEY", 1, true), echoed[#echoed])
+  vim.env.LEADER_K_MISSING_TEST_KEY = saved
+  eq(#marks(), 0)
+end)
+
+test("invalid configuration is rejected without revealing secrets", function()
+  use("fast", { base_url = "http://example.com/v1" })
+  local _, err = config.endpoint()
+  truthy(err:find("must use https", 1, true), err)
+  use("fast", { base_url = BASE_URL .. "/chat/completions" })
+  _, err = config.endpoint()
+  truthy(err:find("base_url", 1, true), err)
+  use("fast", { api_key = { env = "INVALID-NAME" } })
+  _, err = config.endpoint()
+  truthy(err:find("api_key", 1, true), err)
+  use("fast", { api_key = "sk-secret\nmalformed" })
+  _, err = config.endpoint()
+  truthy(err:find("api_key", 1, true), err)
+  truthy(not err:find("sk-secret", 1, true), err)
+  use("fast", { api_key = {} })
+  _, err = config.endpoint()
+  truthy(err:find("api_key", 1, true), err)
+  use("fast", { provider = "openrouter" })
+  _, err = config.endpoint()
+  truthy(err:find("unknown configuration option `provider`", 1, true), err)
+  use("fast", { timeout_ms = "180000" })
+  _, err = config.endpoint()
+  truthy(err:find("`timeout_ms`", 1, true), err)
+end)
+
+test("unreachable host", function()
+  use("fast", { base_url = "http://127.0.0.1:1/v1" })
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_error(s)
+  truthy(s.error:find("request failed", 1, true), s.error)
+end)
+
+if vim.env.LEADER_K_LIVE == "1" then
+  test("live compatible endpoint edit", function()
+    lk.setup({
+      base_url = assert(vim.env.LEADER_K_BASE_URL),
+      model = assert(vim.env.LEADER_K_MODEL),
+      api_key = { env = "LEADER_K_API_KEY" },
+    })
+    vim.bo.filetype = "lua"
+    lines(SAMPLE)
+    lk.edit(3, 9, "use ipairs instead of a numeric loop")
+    local s = assert(session.get(0))
+    wait_state(s, "review", 60000)
+    local text = table.concat(s.proposal, "\n")
+    truthy(text:find("ipairs", 1, true), text)
+    truthy(s.proposal[1]:find("^function M.total"), text)
+    s:accept()
+    eq(buf_lines()[1], "local M = {}")
+    eq(buf_lines()[#buf_lines()], "return M")
+    print("     " .. table.concat(vim.api.nvim_buf_get_lines(0, 2, -3, false), "\n     "))
+  end)
+end
+
+server:kill(15)
+print(("\n%d passed, %d failed"):format(passed, failed))
+os.exit(failed == 0 and 0 or 1)
