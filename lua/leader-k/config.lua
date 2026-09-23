@@ -37,6 +37,18 @@ M.defaults = {
 ---@type leader_k.Config
 M.options = vim.deepcopy(M.defaults)
 
+-- Every accepted option. `defaults` cannot list them: a nil default adds no key.
+local known = {
+  base_url = true,
+  model = true,
+  api_key = true,
+  params = true,
+  context_bytes = true,
+  timeout_ms = true,
+  libcurl = true,
+  keys = true,
+}
+
 ---@param opts leader_k.Config|nil
 function M.setup(opts)
   if opts ~= nil and type(opts) ~= "table" then
@@ -51,13 +63,14 @@ end
 ---@field model string
 ---@field key? string
 ---@field params table
+---@field libcurl? string
 
 ---Resolves the endpoint for one request. The key is read now and never stored.
 ---@return leader_k.Endpoint|nil endpoint, string|nil err
 function M.endpoint()
   local o = M.options
   for field in pairs(o) do
-    if M.defaults[field] == nil and field ~= "base_url" and field ~= "model" and field ~= "api_key" then
+    if not known[field] then
       return nil, ("unknown configuration option `%s`"):format(tostring(field))
     end
   end
@@ -129,6 +142,7 @@ function M.endpoint()
     model = o.model,
     key = key,
     params = o.params or {},
+    libcurl = o.libcurl,
   }
 end
 

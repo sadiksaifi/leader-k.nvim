@@ -40,7 +40,7 @@ local sessions = {}
 ---@field stale boolean
 ---@field cancel fun()|nil
 ---@field timer uv.uv_timer_t|nil
----@field dirty boolean
+---@field dirty boolean Text arrived since the proposal was last parsed.
 ---@field saved_maps table[]
 ---@field augroup integer
 ---@field busy boolean
@@ -110,8 +110,24 @@ function Session:set_reserve(rows)
 end
 
 function Session:draw()
-  self.dirty = false
   render.draw(self)
+end
+
+-- Parses the reply streamed so far. Runs at most once per frame: the work
+-- grows with the reply, so parsing on every delta is quadratic.
+function Session:update_proposal()
+  if not self.dirty then
+    return
+  end
+  self.dirty = false
+  local ex = prompt.extract(self.raw, false)
+  if ex.kind == "code" then
+    self.phase = "writing"
+    self.proposal = prompt.lines(ex.text, self.ctx, false)
+    self.hunks = diff(self.original, self.proposal)
+  elseif self.phase == "waiting" then
+    self.phase = "thinking"
+  end
 end
 
 function Session:start_timer()
@@ -124,6 +140,7 @@ function Session:start_timer()
     FRAME_MS,
     vim.schedule_wrap(function()
       if self.state == "running" then
+        self:update_proposal()
         self:draw()
       end
     end)
@@ -150,15 +167,21 @@ function Session:set_busy(on)
   end)
 end
 
+-- Closes the request's connection, if one is open.
+function Session:end_request()
+  local cancel = self.cancel
+  self.cancel = nil
+  if cancel then
+    cancel()
+  end
+end
+
 function Session:destroy()
   self.state = "closed"
   if sessions[self.buf] == self then
     sessions[self.buf] = nil
   end
-  if self.cancel then
-    self.cancel()
-    self.cancel = nil
-  end
+  self:end_request()
   self:stop_timer()
   self:set_busy(false)
   pcall(vim.api.nvim_del_augroup_by_id, self.augroup)
@@ -166,6 +189,53 @@ function Session:destroy()
     render.clear(self.buf)
     pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, self.mark)
     self:restore_maps()
+  end
+end
+
+---Runs what `lhs` does without the session's mapping: the mapping it
+---shadows (`prev`, else a global one), or the built-in key. Called from
+---inside the session's mapping, so v:count still holds the typed count.
+---@param lhs string
+---@param prev table|nil maparg() dict of the shadowed buffer-local mapping.
+local function run_shadowed(lhs, prev)
+  local raw = vim.keycode(lhs)
+  local m = prev
+  if not m then
+    for _, g in ipairs(vim.api.nvim_get_keymap("n")) do
+      if g.lhsraw == raw or g.lhsrawalt == raw then
+        m = g
+        break
+      end
+    end
+  end
+  local count = vim.v.count > 0 and tostring(vim.v.count) or ""
+  if not m then
+    vim.api.nvim_feedkeys(count .. raw, "n", false)
+    return
+  end
+  if m.callback and m.expr == 0 then
+    m.callback()
+    return
+  end
+  local keys
+  if m.callback then
+    keys = m.callback() or ""
+    if m.replace_keycodes == 1 then
+      keys = vim.keycode(keys)
+    end
+  else
+    local rhs = m.rhs:gsub("<[Ss][Ii][Dd]>", ("<SNR>%d_"):format(m.sid))
+    keys = m.expr == 1 and vim.fn.eval(rhs) or vim.keycode(rhs)
+  end
+  if m.noremap ~= 0 then
+    vim.api.nvim_feedkeys(count .. keys, "n", false)
+  elseif vim.startswith(keys, raw) then
+    -- As in Vim, a recursive mapping's own lhs at the start of its rhs is
+    -- not mapped again. Here that also keeps the session's map from looping.
+    vim.api.nvim_feedkeys(count .. raw, "n", false)
+    vim.api.nvim_feedkeys(keys:sub(#raw + 1), "m", false)
+  else
+    vim.api.nvim_feedkeys(count .. keys, "m", false)
   end
 end
 
@@ -191,12 +261,13 @@ function Session:install_maps()
     local prev = vim.fn.maparg(lhs, "n", false, true)
     if prev and prev.buffer == 1 then
       table.insert(self.saved_maps, prev)
+    else
+      prev = nil
     end
     table.insert(self.saved_maps, { lhs = lhs, unmap = true })
     vim.keymap.set("n", lhs, function()
       if guard and not guard() then
-        local count = vim.v.count > 0 and tostring(vim.v.count) or ""
-        vim.api.nvim_feedkeys(count .. vim.keycode(lhs), "n", false)
+        run_shadowed(lhs, prev)
         return
       end
       fn()
@@ -349,10 +420,7 @@ end
 
 ---Stops a running request. A refine goes back to the proposal it refined.
 function Session:stop()
-  if self.cancel then
-    self.cancel()
-    self.cancel = nil
-  end
+  self:end_request()
   if not self:restore_review() then
     self:destroy()
   end
@@ -362,7 +430,7 @@ end
 ---failed refine goes back to the proposal it refined.
 ---@param msg string
 function Session:fail(msg)
-  self.cancel = nil
+  self:end_request()
   self.error = msg
   if not self:restore_review() then
     self:destroy()
@@ -379,7 +447,7 @@ function Session:send()
   end
   self.model_label = model_label(ep.model)
   self.state, self.phase = "running", "waiting"
-  self.raw, self.proposal, self.hunks, self.error = "", nil, nil, nil
+  self.raw, self.proposal, self.hunks, self.error, self.dirty = "", nil, nil, nil, false
   self.added, self.removed = 0, 0
   self.instruction = self.turns[#self.turns].instruction
 
@@ -392,17 +460,11 @@ function Session:send()
     end,
     on_text = function(delta)
       self.raw = self.raw .. delta
-      local ex = prompt.extract(self.raw, false)
-      if ex.kind == "code" then
-        self.phase = "writing"
-        self.proposal = prompt.lines(ex.text, self.ctx, false)
-        self.hunks = diff(self.original, self.proposal)
-      elseif self.phase == "waiting" then
-        self.phase = "thinking"
-      end
+      self.dirty = true
     end,
     on_done = function(finish_reason)
-      self.cancel = nil
+      -- Some servers keep the connection open after [DONE].
+      self:end_request()
       self:finish(finish_reason)
     end,
     on_error = function(msg)

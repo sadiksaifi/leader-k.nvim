@@ -126,7 +126,19 @@ function M.extract(raw, final)
     return { kind = "code", text = text, complete = true }
   end
   local body = raw:sub(cs + #"<code>")
-  local ce = body:find(CLOSE, 1, true)
+  -- The code itself can contain </code> (HTML, Markdown), so only the last
+  -- closing tag ends the block. While streaming, that is one with nothing
+  -- but whitespace after it so far.
+  local ce
+  if final then
+    local at = body:find(CLOSE, 1, true)
+    while at do
+      ce = at
+      at = body:find(CLOSE, at + 1, true)
+    end
+  else
+    ce = body:find(CLOSE .. "%s*$")
+  end
   if ce then
     body = body:sub(1, ce - 1)
   elseif not final then

@@ -60,6 +60,12 @@ class H(BaseHTTPRequestHandler):
             if model == 'midstream':
                 send(chunk(content="<code>\nlocal x = ")); time.sleep(0.2)
                 send(chunk(content="", finish="error", error={"code": "server_error", "message": "Provider disconnected unexpectedly"})); return
+            if model == 'linger':
+                send(chunk(content="<code>\nlocal x = 1\n</code>")); send(chunk(content="", finish="stop")); send(b"data: [DONE]\n\n")
+                time.sleep(30); return
+            if model == 'linger_error':
+                send(chunk(content="<code>\nlocal x = ")); send(chunk(content="", finish="error", error={"message": "boom"}))
+                time.sleep(30); return
             if model == 'cut':
                 send(chunk(content="<code>\nlocal x = 1\n")); time.sleep(0.2); return
             if model == 'refuse':

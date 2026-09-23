@@ -131,6 +131,7 @@ function M.stream(ep, messages, h, timeout_ms)
     headers = headers,
     body = vim.json.encode(body),
     timeout_ms = timeout_ms,
+    libcurl = ep.libcurl,
     on_status = function(s)
       status = s
     end,

@@ -138,6 +138,20 @@ local SAMPLE = {
   "return M",
 }
 
+-- Runs first: once any request has loaded libcurl, it stays loaded.
+test("the configured libcurl path loads the library, and a bad one can be fixed", function()
+  lines(SAMPLE)
+  use("fast", { libcurl = "/nonexistent/libcurl-leader-k" })
+  lk.edit(1, 1, "x")
+  eq(session.get(0), nil, "the request could not start")
+  truthy(echoed[#echoed]:find("/nonexistent/libcurl-leader-k", 1, true), echoed[#echoed])
+  local path = vim.uv.os_uname().sysname == "Darwin" and "/usr/lib/libcurl.4.dylib" or "libcurl.so.4"
+  use("fast", { libcurl = path })
+  lk.edit(1, 1, "x")
+  wait_state(assert(session.get(0)), "review")
+  eq(http.info().path, path)
+end)
+
 test("streams, shows pending lines, then reviews", function()
   use("slow")
   vim.bo.filetype = "lua"
@@ -223,6 +237,45 @@ test("Enter accepts only while the proposal is visible", function()
   eq(buf_lines()[1], "local function total(items)")
 end)
 
+test("a key the session does not handle runs the user's global mapping", function()
+  use("hang")
+  lines(SAMPLE)
+  local calls = 0
+  vim.keymap.set("n", "<leader>k", function()
+    calls = calls + 1
+  end)
+  lk.edit(3, 9, "x")
+  local s = assert(session.get(0))
+  vim.api.nvim_feedkeys(vim.keycode("<leader>k"), "x", false)
+  vim.keymap.del("n", "<leader>k")
+  eq(s.state, "running")
+  eq(calls, 1, "the global <leader>k mapping ran during the request")
+end)
+
+test("off-screen keys keep the user's mappings, counts, and recursion rules", function()
+  use("fast")
+  local long = {}
+  for i = 1, 300 do
+    long[i] = "x" .. i
+  end
+  lines(long)
+  vim.keymap.set("n", "<CR>", "<Cmd>let g:lk_cr = v:count<CR>")
+  vim.keymap.set("n", "<BS>", "<BS>j", { remap = true })
+  lk.edit(1, 2, "change")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  vim.cmd("normal! 250Gzzl")
+  vim.api.nvim_feedkeys("3" .. vim.keycode("<CR>"), "x", false)
+  local cr = vim.g.lk_cr
+  vim.api.nvim_feedkeys(vim.keycode("<BS>"), "x", false)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  vim.keymap.del("n", "<CR>")
+  vim.keymap.del("n", "<BS>")
+  eq(s.state, "review")
+  eq(cr, 3, "the global <CR> mapping ran with the count")
+  eq(cursor, { 251, 0 }, "<BS>j ran once: built-in <BS>, then j")
+end)
+
 test("HTTP 401 goes to the message area", function()
   use("err401")
   lines(SAMPLE)
@@ -251,6 +304,26 @@ test("mid-stream provider error", function()
   local s = assert(session.get(0))
   wait_error(s)
   truthy(s.error:find("Provider disconnected", 1, true), s.error)
+end)
+
+test("a finished reply closes a connection the server keeps open", function()
+  use("linger")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  vim.wait(50)
+  eq(http.active_count(), 0)
+end)
+
+test("an in-stream error closes a connection the server keeps open", function()
+  use("linger_error")
+  lines(SAMPLE)
+  lk.edit(1, 1, "x")
+  local s = assert(session.get(0))
+  truthy(wait_error(s):find("boom", 1, true), s.error)
+  vim.wait(50)
+  eq(http.active_count(), 0)
 end)
 
 test("stream cut without a finish reason", function()
@@ -530,6 +603,14 @@ test("extract: partial closing tag never shows", function()
   eq(p.extract("<code>\nlocal a = 1\n</co", false).text, "local a = 1\n")
   eq(p.extract("thinking out loud", false).kind, "pending")
   eq(p.extract("<code>\n```lua\nx()\n```\n</code>", true).text, "x()")
+end)
+
+test("extract: </code> inside the code does not end the block", function()
+  local p = require("leader-k.prompt")
+  local html = "<code>\n<p>Run <code>make</code> first.</p>\n</code>\n"
+  eq(p.extract(html, true).text, "<p>Run <code>make</code> first.</p>\n")
+  eq(p.extract(html:sub(1, 34), false).text, "<p>Run <code>make</code> fi")
+  eq(p.extract(html, false).complete, true)
 end)
 
 test("visual <leader>k opens the prompt for the selected lines", function()

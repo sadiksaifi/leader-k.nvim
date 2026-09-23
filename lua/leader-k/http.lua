@@ -80,6 +80,8 @@ local candidates = {
 
 ---@type ffi.namespace*|nil
 local lib
+-- Only automatic loading caches its failure; an explicit path is retried, so
+-- a corrected `libcurl` setting takes effect without a restart.
 ---@type string|nil
 local load_error
 ---@type string|nil
@@ -102,20 +104,24 @@ function M.load(path)
     list = sys == "Darwin" and candidates.macos or sys:match("Windows") and candidates.windows or candidates.linux
   end
   local errors = {}
+  local err
   for _, name in ipairs(list) do
     local ok, loaded = pcall(ffi.load, name)
     if ok then
-      if loaded.curl_global_init(CURL_GLOBAL_DEFAULT) ~= CURLE_OK then
-        load_error = "curl_global_init failed for " .. name
-        return nil, load_error
+      if loaded.curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK then
+        lib, lib_path = loaded, name
+        return lib
       end
-      lib, lib_path = loaded, name
-      return lib
+      err = "curl_global_init failed for " .. name
+      break
     end
     errors[#errors + 1] = name
   end
-  load_error = "could not load the libcurl shared library (tried " .. table.concat(errors, ", ") .. ")"
-  return nil, load_error
+  err = err or ("could not load the libcurl shared library (tried " .. table.concat(errors, ", ") .. ")")
+  if not path then
+    load_error = err
+  end
+  return nil, err
 end
 
 ---@return { path: string, version: string, tls: string, async_dns: boolean }|nil
@@ -148,6 +154,8 @@ local transfers = {}
 local active = 0
 local next_id = 0
 local multi ---@type ffi.cdata*|nil
+-- True inside curl_multi_perform, where libcurl forbids removing handles.
+local performing = false
 local timer ---@type uv.uv_timer_t|nil
 local running = ffi.new("int[1]")
 local queued = ffi.new("int[1]")
@@ -196,7 +204,9 @@ end
 -- Drives every active transfer. Kept out of the JIT because libcurl calls back
 -- into Lua from inside curl_multi_perform, which LuaJIT forbids on traces.
 tick = function()
+  performing = true
   local rc = lib.curl_multi_perform(multi, running)
+  performing = false
   local done = {}
   while true do
     local msg = lib.curl_multi_info_read(multi, queued)
@@ -227,6 +237,12 @@ tick = function()
     if not t.closed then
       t.closed = true
       pcall(t.on_done, err, t.status)
+    end
+  end
+  -- Release transfers cancelled from inside a callback during the perform.
+  for _, t in pairs(transfers) do
+    if t.closed then
+      release(t)
     end
   end
   if rc ~= 0 then
@@ -261,13 +277,15 @@ end
 ---@field on_data fun(chunk: string) Called on the main loop with raw body bytes.
 ---@field on_done fun(err: string|nil, status: integer|nil) Called exactly once unless cancelled.
 ---@field timeout_ms integer|nil
+---@field libcurl string|nil Explicit library path; nil searches the system.
 
 ---Starts a POST request. Returns a cancel function, or nil and an error.
+---The cancel function is safe to call from any callback.
 ---@param req leader_k.http.Request
 ---@return (fun())|nil cancel, string|nil err
 function M.post(req)
   if not lib then
-    local _, err = M.load()
+    local _, err = M.load(req.libcurl)
     if not lib then
       return nil, err
     end
@@ -354,9 +372,12 @@ function M.post(req)
       return
     end
     t.closed = true
-    -- Aborting the connection lets the server stop generating.
-    release(t)
-    stop_timer_if_idle()
+    -- Aborting the connection lets the server stop generating. A cancel from
+    -- inside a callback is released by tick once the perform returns.
+    if not performing then
+      release(t)
+      stop_timer_if_idle()
+    end
   end
 end
 
