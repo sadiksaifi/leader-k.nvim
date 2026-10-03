@@ -25,27 +25,39 @@ end
 
 ---Each turn as its question, then its answer or a note about its edit.
 ---@param s leader_k.Session
----@return string[] lines, integer[] questions 0-based rows of question lines, integer latest 0-based row where the last turn starts
+---@return string[] lines, integer[] questions 0-based rows of question lines, integer[] notes 0-based rows of notes, integer latest 0-based row where the last turn starts
 local function transcript(s)
-  local out, questions, latest = {}, {}, 0
+  local out, questions, notes, latest = {}, {}, {}, 0
   for i, turn in ipairs(s.turns) do
-    local text = turn.answer or (turn.applied and "*Applied an edit.*") or (turn.proposal and "*Proposed an edit.*")
+    local text, note = turn.answer, false
     if i == #s.turns and s.state == "running" then
-      text = s.answer_text or "*Waiting for the reply.*"
+      text = s.answer_text
+    end
+    if not text then
+      note = true
+      text = (turn.applied and "*Applied an edit.*")
+        or (turn.proposal and "*Proposed an edit.*")
+        or (i == #s.turns and s.state == "running" and "*Waiting for the reply.*")
+        or nil
     end
     if text then
       if #out > 0 then
         out[#out + 1] = ""
       end
       latest = #out
-      for j, l in ipairs(vim.split(turn.instruction, "\n", { plain = true })) do
+      for _, l in ipairs(vim.split(turn.instruction, "\n", { plain = true })) do
         questions[#questions + 1] = #out
-        out[#out + 1] = (j == 1 and "› " or "  ") .. l
+        out[#out + 1] = "  " .. l
+      end
+      -- A blank line keeps the question out of the answer's first paragraph.
+      out[#out + 1] = ""
+      if note then
+        notes[#notes + 1] = #out
       end
       vim.list_extend(out, vim.split(text, "\n", { plain = true }))
     end
   end
-  return out, questions, latest
+  return out, questions, notes, latest
 end
 
 ---@param s leader_k.Session
@@ -87,7 +99,7 @@ local function winbar(s)
   local function hint(lhs, label)
     return ("%%#LeaderKKey#%s%%#LeaderKHint# %s"):format(escape(render.key_label(lhs)), label)
   end
-  return (" %%#LeaderKQuestion#Answer%%#LeaderKFooter#  %s%%=%s  %s "):format(
+  return (" Answer%%#LeaderKFooter#  %s%%=%s  %s "):format(
     escape(s.model_label or ""),
     hint("q", "close"),
     hint(keys.refine, "follow up")
@@ -159,7 +171,7 @@ function M.sync(s)
     s.answer_buf, s.answer_lines = create_buf(s), nil
   end
   local abuf = s.answer_buf
-  local lines, questions, latest = transcript(s)
+  local lines, questions, notes, latest = transcript(s)
   local joined = table.concat(lines, "\n")
   if joined ~= s.answer_lines then
     s.answer_lines = joined
@@ -169,8 +181,16 @@ function M.sync(s)
     vim.api.nvim_buf_clear_namespace(abuf, ns, 0, -1)
     for _, row in ipairs(questions) do
       vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, {
+        line_hl_group = "LeaderKUser",
+        virt_text = { { "▎", "LeaderKUserBar" } },
+        virt_text_pos = "overlay",
+        hl_mode = "combine",
+      })
+    end
+    for _, row in ipairs(notes) do
+      vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, {
         end_col = #lines[row + 1],
-        hl_group = "LeaderKQuestion",
+        hl_group = "LeaderKNote",
         priority = 200,
       })
     end

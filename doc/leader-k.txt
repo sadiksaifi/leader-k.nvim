@@ -134,8 +134,13 @@ HIGHLIGHTS                                             *leader-k-highlights*
   LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
   LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
   LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
-  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash  LeaderKQuestion
-  LeaderKFocus
+  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash  LeaderKFocus
+
+In the answer panel, your messages use LeaderKUserBar for the bar on their
+left and LeaderKUser for their background. LeaderKUserBar links to Function.
+LeaderKUser blends the background of Normal with the color of LeaderKUserBar,
+or links to CursorLine when either color is missing. Notes such as
+"Proposed an edit." use LeaderKNote.
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*

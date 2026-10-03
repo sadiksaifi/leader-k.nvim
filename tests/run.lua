@@ -639,6 +639,48 @@ test("the answer is a split on the right; closing it ends the answer", function(
   eq(#marks(), 0)
 end)
 
+test("the panel sets your messages apart from the answers", function()
+  use("route")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  follow_up(s, "change it to ipairs")
+  wait_state(s, "review")
+  local abuf = vim.api.nvim_win_get_buf(assert(s.answer_win))
+  local ns = vim.api.nvim_create_namespace("leader-k.answer")
+  local user, notes = {}, {}
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(abuf, ns, 0, -1, { details = true })) do
+    if m[4].line_hl_group == "LeaderKUser" then
+      user[#user + 1] = m[2]
+      eq(m[4].virt_text[1], { "▎", "LeaderKUserBar" })
+    elseif m[4].hl_group == "LeaderKNote" then
+      notes[#notes + 1] = m[2]
+    end
+  end
+  local text = vim.api.nvim_buf_get_lines(abuf, 0, -1, false)
+  eq(text[user[1] + 1], "  why?")
+  eq(text[user[2] + 1], "  change it to ipairs")
+  eq(#user, 2, "answer lines have no tint")
+  eq(notes, { #text - 1 }, "only the edit note is dimmed")
+  s:destroy()
+end)
+
+test("the tint of your messages blends the background with the accent", function()
+  vim.api.nvim_set_hl(0, "Normal", { fg = 0xffffff, bg = 0x000000 })
+  vim.api.nvim_set_hl(0, "Function", { fg = 0x6496c8 })
+  vim.cmd("highlight clear LeaderKUser | highlight clear LeaderKUserBar")
+  require("leader-k.highlight").setup()
+  -- 12% of 0x64, 0x96, 0xc8.
+  eq(vim.api.nvim_get_hl(0, { name = "LeaderKUser" }).bg, 0x0c1218)
+  vim.api.nvim_set_hl(0, "Normal", { fg = 0xffffff })
+  vim.cmd("highlight clear LeaderKUser")
+  require("leader-k.highlight").setup()
+  eq(vim.api.nvim_get_hl(0, { name = "LeaderKUser" }).link, "CursorLine", "no background to blend")
+  vim.api.nvim_set_hl(0, "Normal", {})
+  vim.api.nvim_set_hl(0, "Function", {})
+end)
+
 test("closing the panel during review keeps the proposal", function()
   use("route")
   lines(SAMPLE)
@@ -755,7 +797,7 @@ test("follow-ups keep one conversation across answers and edits", function()
   follow_up(s, "explain more")
   wait_state(s, "answered")
   local text = assert(answer_text(s))
-  truthy(text:find("› why?", 1, true) and text:find("› explain more", 1, true), text)
+  truthy(text:find("  why?\n\nIt multiplies", 1, true) and text:find("  explain more\n\n", 1, true), text)
   local msgs = last_request().body.messages
   eq(#msgs, 4)
   truthy(msgs[3].content:find("<answer>\nIt multiplies", 1, true), msgs[3].content)
@@ -764,13 +806,13 @@ test("follow-ups keep one conversation across answers and edits", function()
   follow_up(s, "change it to ipairs")
   wait_state(s, "review")
   eq(s.proposal[1], "local function total(items)")
-  truthy(assert(answer_text(s)):find("› change it to ipairs\n*Proposed an edit.*", 1, true), "the panel stays")
+  truthy(assert(answer_text(s)):find("  change it to ipairs\n\n*Proposed an edit.*", 1, true), "the panel stays")
   eq(#last_request().body.messages, 6)
 
   follow_up(s, "why that?")
   wait_state(s, "answered")
   text = assert(answer_text(s))
-  truthy(text:find("› change it to ipairs\n*Proposed an edit.*", 1, true), text)
+  truthy(text:find("  change it to ipairs\n\n*Proposed an edit.*", 1, true), text)
   msgs = last_request().body.messages
   truthy(msgs[7].content:find("<code>\nlocal function total", 1, true), msgs[7].content)
   eq(buf_lines(), SAMPLE)
