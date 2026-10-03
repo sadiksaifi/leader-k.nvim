@@ -650,6 +650,28 @@ test("the answer is a split on the right; closing it ends the answer", function(
   eq(#marks(), 0)
 end)
 
+test("the panel input grows as a long line wraps", function()
+  use("answer")
+  lines(SAMPLE)
+  for _, ls in ipairs({ 2, 3 }) do
+    vim.o.laststatus = ls
+    lk.run(3, 9, "why?", { mode = "ask" })
+    local s = assert(session.get(0))
+    wait_state(s, "answered")
+    local iwin = assert(s.input_win)
+    eq(vim.wo[iwin].wrap, true)
+    local ibuf = vim.api.nvim_win_get_buf(iwin)
+    vim.api.nvim_buf_set_lines(ibuf, 0, -1, false, { string.rep("word ", 20) })
+    vim.api.nvim_exec_autocmds("TextChanged", { buffer = ibuf })
+    vim.wait(20)
+    local rows = vim.api.nvim_win_text_height(iwin, {}).all
+    truthy(rows > 1, "the line wraps")
+    eq(vim.fn.winheight(iwin), rows, "every wrapped row is in view with laststatus=" .. ls)
+    s:destroy()
+  end
+  vim.o.laststatus = 2
+end)
+
 test("follow-ups are typed in the panel; an edit moves focus to the code", function()
   use("route")
   lines(SAMPLE)

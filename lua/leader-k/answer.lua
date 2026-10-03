@@ -156,7 +156,10 @@ local function refresh_input(s)
       virt_text_pos = "overlay",
     })
   end
+  -- Every row the text wraps to stays in view. The height counts the
+  -- winbar, which holds the status when windows have no status line.
   local h = math.max(1, math.min(vim.api.nvim_win_text_height(win, {}).all, MAX_INPUT))
+  h = h + (vim.wo[win].winbar ~= "" and 1 or 0)
   if vim.api.nvim_win_get_height(win) ~= h then
     vim.api.nvim_win_set_height(win, h)
   end
