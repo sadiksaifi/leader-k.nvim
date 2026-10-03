@@ -173,7 +173,8 @@ function M.sync(s)
   end
   local border = input.border_rows(awin)
   local max_h = math.max(3, math.floor(info.height * 0.4))
-  local want = math.min(vim.api.nvim_win_text_height(awin, { max_height = max_h }).all, max_h)
+  -- Sized to the latest turn, which the view shows; earlier turns are above.
+  local want = math.min(vim.api.nvim_win_text_height(awin, { start_row = latest, max_height = max_h }).all, max_h)
   local row, height
   if r1 <= bot then
     local at = vim.fn.screenpos(win, r1 + 1, 1).row - info.winrow
