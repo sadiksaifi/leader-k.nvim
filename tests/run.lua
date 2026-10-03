@@ -546,6 +546,23 @@ local function answer_text(s)
   return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false), "\n")
 end
 
+---@return string the row of key hints at the bottom of the panel input.
+local function hint_row(s)
+  local ibuf = vim.api.nvim_win_get_buf(s.input_win)
+  local ns = vim.api.nvim_create_namespace("leader-k.answer.input")
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(ibuf, ns, 0, -1, { details = true })) do
+    local vl = m[4].virt_lines
+    if vl and not m[4].virt_lines_above then
+      local text = {}
+      for _, c in ipairs(vl[#vl]) do
+        text[#text + 1] = c[1]
+      end
+      return table.concat(text)
+    end
+  end
+  return ""
+end
+
 ---Types a follow-up where refine puts it, then returns to the code window.
 local function follow_up(s, text)
   local code = vim.api.nvim_get_current_win()
@@ -650,6 +667,26 @@ test("the answer is a split on the right; closing it ends the answer", function(
   eq(#marks(), 0)
 end)
 
+test("the panel leaves a status line set by another plugin alone", function()
+  use("answer_slow")
+  lines(SAMPLE)
+  for _, ls in ipairs({ 2, 3 }) do
+    vim.o.laststatus = ls
+    lk.run(3, 9, "why?", { mode = "ask" })
+    local s = assert(session.get(0))
+    local iwin = assert(s.input_win)
+    -- As lualine does for every window on a timer.
+    vim.wo[iwin].statusline = "%{'plugin'}"
+    s:refine()
+    vim.api.nvim_feedkeys("iabc", "x", false)
+    wait_state(s, "answered")
+    vim.wait(20)
+    eq(vim.wo[iwin].statusline, "%{'plugin'}", "kept through typing and streaming with laststatus=" .. ls)
+    s:destroy()
+  end
+  vim.o.laststatus = 2
+end)
+
 test("the panel input grows as a long line wraps", function()
   use("answer")
   lines(SAMPLE)
@@ -694,9 +731,7 @@ test("follow-ups are typed in the panel; an edit moves focus to the code", funct
   local bar = vim.wo[s.input_win].winbar
   truthy(bar:find("%#LeaderKCountAdd#+3%#LeaderKDivider#%#LeaderKCountDelete# -3", 1, true), bar)
   truthy(bar:find("Review it in the code", 1, true), bar)
-  local hints = vim.wo[s.input_win].statusline
-  truthy(hints:find("Enter%#LeaderKHint# accept", 1, true), hints)
-  truthy(hints:find("Leader k%#LeaderKHint# refine", 1, true), hints)
+  eq(hint_row(s), "Enter accept  Backspace reject  Leader k refine")
   local header = false
   for _, m in ipairs(marks()) do
     header = header or m[4].virt_lines_above == true
@@ -704,8 +739,7 @@ test("follow-ups are typed in the panel; an edit moves focus to the code", funct
   eq(header, false, "the review status and keys are in the panel, not the code")
   s:refine()
   vim.wait(20)
-  hints = vim.wo[s.input_win].statusline
-  truthy(hints:find("Enter%#LeaderKHint# send", 1, true), "the input's own keys while it is focused: " .. hints)
+  eq(hint_row(s), "Enter send  Up history  Esc back to the code", "the input's own keys while it is focused")
   vim.cmd.stopinsert()
   s:accept()
   eq(vim.api.nvim_win_is_valid(code_win), true)

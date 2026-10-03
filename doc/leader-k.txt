@@ -20,14 +20,14 @@ Type a request and press Enter. The model decides how to reply:
 
 The panel holds the conversation. Its transcript sits above the input. A
 dim divider above the input shows the status, such as "+3 -3 Review it in
-the code.", and a row under the input shows the keys. The code keeps the
+the code.", and the last row of the input box shows the keys. The code keeps the
 selection marked and shows a diff when a reply proposes an edit; focus
 then moves to the code for review.
 
 During review: Enter accepts, Backspace rejects, <leader>k moves into the
 panel input to refine, and <C-c> stops a running request. These keys work
-in the code; the row under the input lists them while the input is not
-focused. A changed
+in the code; the last row of the input box lists them while the input is
+not focused. A changed
 selection cannot be accepted until that edit is undone. Errors appear in
 |:messages|.
 

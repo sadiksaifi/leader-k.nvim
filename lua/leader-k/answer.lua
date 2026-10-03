@@ -106,12 +106,6 @@ local function escape(text)
   return (text:gsub("%%", "%%%%"))
 end
 
----@param lhs string
----@param label string
-local function hint(lhs, label)
-  return ("%%#LeaderKKey#%s%%#LeaderKHint# %s%%*"):format(escape(render.key_label(lhs)), label)
-end
-
 ---The divider above the input: a dim rule that carries what the
 ---conversation is doing and how to stop or close it, as wide as the input.
 ---@param s leader_k.Session
@@ -152,26 +146,32 @@ local function divider(s, width)
   return table.concat(out)
 end
 
----The row of key hints under the input: the review keys while a proposal
----waits in the code, the input's own keys otherwise.
+---The row of key hints at the bottom of the input box: the review keys
+---while a proposal waits in the code, the input's own keys otherwise.
 ---@param s leader_k.Session
 ---@param focused boolean The input has focus.
+---@return string[][] chunks
 local function hints(s, focused)
   local keys = config.options.keys
   local list
   if s.state == "review" and not focused then
     if s.stale then
-      list = { hint(keys.reject, "discard") }
+      list = { { keys.reject, "discard" } }
     elseif s.added == 0 and s.removed == 0 then
-      list = { hint(keys.reject, "close") }
+      list = { { keys.reject, "close" } }
     else
-      list = { hint(keys.accept, "accept"), hint(keys.reject, "reject") }
+      list = { { keys.accept, "accept" }, { keys.reject, "reject" } }
     end
-    list[#list + 1] = hint(keys.refine, "refine")
+    list[#list + 1] = { keys.refine, "refine" }
   else
-    list = { hint("<CR>", "send"), hint("<Up>", "history"), hint("<Esc>", "back to the code") }
+    list = { { "<CR>", "send" }, { "<Up>", "history" }, { "<Esc>", "back to the code" } }
   end
-  return " " .. table.concat(list, "  ")
+  local chunks = {}
+  for i, h in ipairs(list) do
+    chunks[#chunks + 1] = { (i > 1 and "  " or "") .. render.key_label(h[1]), "LeaderKKey" }
+    chunks[#chunks + 1] = { " " .. h[2], "LeaderKHint" }
+  end
+  return chunks
 end
 
 ---@param win integer
@@ -218,16 +218,18 @@ local function refresh_input(s)
   vim.api.nvim_buf_clear_namespace(buf, input_ns, 0, -1)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   -- A row above and below the text gives it room inside the box. The row
-  -- above names the selection sent with the next message.
+  -- above names the selection sent with the next message; a row of key
+  -- hints closes the box. The hints are not in the window's status line,
+  -- which statusline plugins such as lualine keep setting for every window.
   local attached = s:attachment()
-  local pad = { { { "", "" } } }
+  local focused = vim.api.nvim_get_current_win() == win
   vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, {
-    virt_lines = attached and { { { attached, "LeaderKNote" } } } or pad,
+    virt_lines = { attached and { { attached, "LeaderKNote" } } or { { "", "" } } },
     virt_lines_above = true,
   })
-  vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, { virt_lines = pad })
-  local focused = vim.api.nvim_get_current_win() == win
-  set_wo(win, "statusline", hints(s, focused))
+  vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, {
+    virt_lines = { { { "", "" } }, hints(s, focused) },
+  })
   if #lines == 1 and lines[1] == "" then
     local text
     if s.state == "prompt" then
@@ -250,7 +252,7 @@ local function refresh_input(s)
   -- Every row the text wraps to stays in view, with the padding. The
   -- height counts the winbar that holds the divider.
   local rows = vim.api.nvim_win_text_height(win, {}).all
-  local h = math.max(3, math.min(rows, MAX_INPUT + 2))
+  local h = math.max(4, math.min(rows, MAX_INPUT + 3))
   if vim.api.nvim_win_get_height(win) ~= h + 1 then
     vim.api.nvim_win_set_height(win, h + 1)
   end
@@ -394,17 +396,20 @@ local function open_panel(s)
   vim.wo[iwin].winfixheight = true
   -- A plain box under the divider, its text in line with the transcript's.
   vim.wo[iwin].statuscolumn = " "
-  -- The rows around the box stay plain: a blank row above the divider and a
-  -- dim line of hints below the box, where windows have status lines.
+  -- Where windows have status lines, the rows around the box stay blank.
+  -- They are set once: statusline plugins may replace them.
   vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal"
   -- With a global status line, the blank row is a window separator; its
   -- joint with the code window's border stays a plain vertical line, in
   -- the border's own WinSeparator color.
   local vert = vim.opt.fillchars:get().vert or "│"
   vim.wo[awin].fillchars = "eob: ,stl: ,stlnc: ,horiz: ,horizup: ,horizdown: ,vertright:" .. vert
-  vim.wo[awin].statusline = " "
   vim.wo[iwin].winhighlight =
     "WinBar:LeaderKDivider,WinBarNC:LeaderKDivider,StatusLine:LeaderKDivider,StatusLineNC:LeaderKDivider"
+  -- A global status line shows the focused window's; it stays the user's.
+  if vim.o.laststatus ~= 3 then
+    vim.wo[awin].statusline, vim.wo[iwin].statusline = " ", " "
+  end
   s.answer_win, s.input_win = awin, iwin
 end
 
