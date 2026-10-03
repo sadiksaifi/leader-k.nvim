@@ -22,9 +22,9 @@ local function key_label(lhs)
   if named[lower] then
     return named[lower]
   end
-  local ctrl = lhs:match("^<[Cc]%-(.)>$")
+  local ctrl, rest = lhs:match("^<[Cc]%-(.)>(.*)$")
   if ctrl then
-    return "Ctrl-" .. ctrl
+    return "Ctrl-" .. ctrl .. (rest ~= "" and " " .. rest or "")
   end
   if lower:find("^<leader>") then
     local l = (leader == nil or leader == " ") and "Space" or leader
@@ -262,6 +262,7 @@ local function header(s, now, width)
     add("  ", "")
     hint(o.keys.reject, "close")
     hint(o.keys.refine, "follow up")
+    hint(o.keys.focus, "focus")
   elseif s.state == "review" then
     if s.stale then
       add("Selection edited after the request.", "LeaderKWarn")

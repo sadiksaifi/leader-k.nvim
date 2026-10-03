@@ -389,6 +389,17 @@ function Session:install_maps()
       return self.state == "review" or self.state == "answered"
     end
   )
+  map(
+    keys.focus,
+    function()
+      vim.api.nvim_set_current_win(self.answer_win)
+    end,
+    "focus the answer",
+    function()
+      local win = self.answer_win
+      return win ~= nil and vim.api.nvim_win_is_valid(win) and not vim.api.nvim_win_get_config(win).hide
+    end
+  )
 end
 
 function Session:restore_maps()
