@@ -92,17 +92,21 @@ local function wait_state(s, want, ms)
   eq(s.state, want, "state (error: " .. tostring(s.error) .. ")")
 end
 
--- Errors go to the message area. Capture them instead of printing.
-local echoed = {}
+-- Errors go to the message area. Capture them instead of printing. Keep
+-- warnings too.
+local echoed, warned = {}, {}
 local real_echo = vim.api.nvim_echo
 vim.api.nvim_echo = function(chunks, history, opts)
+  local text = {}
+  for _, c in ipairs(chunks) do
+    text[#text + 1] = c[1]
+  end
   if opts and opts.err then
-    local text = {}
-    for _, c in ipairs(chunks) do
-      text[#text + 1] = c[1]
-    end
     echoed[#echoed + 1] = table.concat(text)
     return
+  end
+  if chunks[1] and chunks[1][2] == "WarningMsg" then
+    warned[#warned + 1] = table.concat(text)
   end
   return real_echo(chunks, history, opts)
 end
@@ -1273,6 +1277,72 @@ test("a failed follow-up keeps the new selection attached", function()
   eq(#s.turns, 1)
   eq({ s.buf, render.region(s) }, { a, 2, 8 }, "edits target the first selection again")
   eq(chip(s), { "Attached: line 11 of [unnamed buffer]", "LeaderKNote" })
+end)
+
+local REPLACED = "leader-k: the selected lines were replaced. Select the code again, or undo."
+
+test("a follow-up after every selected line was replaced sends nothing until undo", function()
+  use("route")
+  lines(SAMPLE)
+  vim.api.nvim_buf_set_name(0, "replaced.lua")
+  lk.run(3, 5, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  local before = last_request()
+  undo_break()
+  -- A formatter that rewrites the file replaces every line.
+  vim.cmd("silent %!cat")
+  follow_up(s, "fix it")
+  eq(s.state, "answered", "nothing sent")
+  eq(last_request(), before, "no request")
+  eq(warned[#warned], REPLACED)
+  eq(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(s.input_win), 0, -1, false), { "fix it" }, "text kept")
+  eq(chip(s), { "Attached: lines of replaced.lua, replaced since. Select them again.", "LeaderKNote" })
+
+  vim.cmd("silent undo")
+  eq({ render.region(s) }, { 2, 4 }, "undo restores the selection")
+  follow_up(s, "fix it")
+  wait_state(s, "answered")
+  local msgs = last_request().body.messages
+  eq(#msgs, 4)
+  truthy(msgs[4].content:find("Request: fix it", 1, true), msgs[4].content)
+end)
+
+test("a selection attached after every selected line was replaced is sent", function()
+  use("route")
+  lines(SAMPLE)
+  vim.keymap.set("x", "<leader>k", lk.open)
+  lk.run(3, 5, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, buf_lines())
+  vim.api.nvim_feedkeys("6GVj" .. vim.keycode("<Space>") .. "k", "x", false)
+  vim.cmd.stopinsert()
+  vim.api.nvim_set_current_win(s.win)
+  follow_up(s, "fix it")
+  wait_state(s, "answered")
+  eq({ render.region(s) }, { 5, 6 })
+  local msgs = last_request().body.messages
+  truthy(
+    msgs[4].content:find("<selection>\n    sum = sum + items[i].price * items[i].qty\n  end\n</selection>", 1, true),
+    msgs[4].content
+  )
+end)
+
+test("lines just accepted and then replaced do not resume the conversation", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.run(1, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  s:accept()
+  vim.cmd("silent %!cat")
+  vim.cmd("normal! 1G")
+  lk.open()
+  local r = assert(session.current())
+  eq(#r.turns, 0, "a new conversation")
+  eq({ render.region(r) }, { 0, 0 })
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "x", false)
 end)
 
 test("diagnostics in the selection are sent", function()

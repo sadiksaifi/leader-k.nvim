@@ -58,7 +58,7 @@ local function resumable(buf, r0, r1, mode, selected)
     return nil
   end
   local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, r.mark, { details = true })
-  if not m[1] or vim.uv.now() > r.expires then
+  if not m[1] or m[3].invalid or vim.uv.now() > r.expires then
     forget()
     return nil
   end
@@ -162,11 +162,14 @@ end
 ---@return integer mark Extmark over rows r0..r1 that grows with edits inside them.
 local function region_mark(buf, r0, r1)
   local last = vim.api.nvim_buf_get_lines(buf, r1, r1 + 1, false)[1] or ""
+  -- Replacing every line, as a formatter that rewrites the file may, would
+  -- leave the mark on one unrelated line; it is invalid instead until undo.
   return vim.api.nvim_buf_set_extmark(buf, mark_ns, r0, 0, {
     end_row = r1,
     end_col = #last,
     right_gravity = true,
     end_right_gravity = false,
+    invalidate = true,
   })
 end
 
@@ -175,10 +178,20 @@ end
 ---@return integer r0, integer r1 0-based rows, inclusive; r1 < r0 once the mark is gone.
 local function region_of(buf, mark)
   local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, mark, { details = true })
-  if not m[1] then
+  if not m[1] or m[3].invalid then
     return 0, -1
   end
   return m[1], math.max(m[1], m[3].end_row or m[1])
+end
+
+---@param t leader_k.Target
+---@return boolean replaced Every line of the selection was replaced or deleted.
+local function replaced(t)
+  if not vim.api.nvim_buf_is_valid(t.buf) then
+    return true
+  end
+  local r0, r1 = region_of(t.buf, t.mark)
+  return r1 < r0
 end
 
 ---@param buf integer
@@ -292,7 +305,7 @@ function Session:attachment()
   if self.pending then
     return describe(self.pending)
   end
-  if self.state == "prompt" and #self.turns == 0 then
+  if (self.state == "prompt" and #self.turns == 0) or replaced(self:target()) then
     return describe(self:target())
   end
 end
@@ -833,6 +846,7 @@ function Session:remember(r0, r1, lines)
       end_col = #lines[#lines],
       right_gravity = true,
       end_right_gravity = false,
+      invalidate = true,
     }),
     turns = turns,
     ctx = self.ctx,
@@ -901,6 +915,10 @@ function Session:follow_up(text)
   if text == "" and (state == "prompt" or self.pending) then
     return false
   end
+  if replaced(self.pending or self:target()) then
+    self:warn_replaced()
+    return false
+  end
   local last = self.turns[#self.turns]
   self:save_review()
   if state ~= "review" then
@@ -939,6 +957,17 @@ function Session:follow_up(text)
   return true
 end
 
+-- The selection a message would send is gone, so nothing is sent.
+function Session:warn_replaced()
+  vim.api.nvim_echo({
+    {
+      "leader-k: the selected lines were replaced. Select the code again, or undo.",
+      "WarningMsg",
+    },
+  }, false, {})
+  answer.sync(self)
+end
+
 ---Sends the text typed in the panel input: the first request, or a
 ---follow-up.
 ---@param text string
@@ -948,6 +977,10 @@ function Session:submit(text)
     return self:follow_up(text)
   end
   if text == "" then
+    return false
+  end
+  if replaced(self:target()) then
+    self:warn_replaced()
     return false
   end
   -- Read the selection again in case it changed while typing.
@@ -989,7 +1022,7 @@ function M.start(r0, r1, instruction, opts)
     end
     if instruction == "" then
       answer.focus_input(s)
-    elseif not s:submit(instruction) then
+    elseif not s:submit(instruction) and s.state == "running" then
       vim.api.nvim_echo({
         { "leader-k: a request is already running. " },
         { render.key_label(config.options.keys.cancel), "Special" },

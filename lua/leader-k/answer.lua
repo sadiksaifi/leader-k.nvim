@@ -49,6 +49,9 @@ end
 ---@param part boolean Only some characters of the rows are selected.
 ---@return string
 function M.label(path, r0, r1, part)
+  if r1 < r0 then
+    return ("Attached: lines of %s, replaced since. Select them again."):format(vim.fn.fnamemodify(path, ":t"))
+  end
   local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
   return ("Attached: %s%s of %s"):format(part and "part of " or "", where, vim.fn.fnamemodify(path, ":t"))
 end

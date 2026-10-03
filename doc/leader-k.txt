@@ -47,6 +47,10 @@ line with the message. From then on, edits replace that selection. A
 selection made before the first request replaces the first one. In Normal
 mode, <leader>k only moves into the input.
 
+If every line of the selection is replaced, for example by a formatter that
+rewrites the file, nothing is sent until you attach a new selection or undo
+the change.
+
 A characterwise or blockwise selection (|v| or |CTRL-V|) sends the lines it
 touches plus the selected characters. Only those characters are
 highlighted. An edit still replaces whole lines.

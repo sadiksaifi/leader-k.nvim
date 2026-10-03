@@ -103,7 +103,9 @@ continues it.
 To bring other code into the conversation, select it in any buffer and
 press `<leader>k`. The input shows it as attached, for example
 "Attached: lines 3-9 of sample.lua", and it goes with your next message.
-From then on, edits replace that selection.
+From then on, edits replace that selection. If every line of the selection
+is replaced, for example by a formatter that rewrites the file, select the
+code again or undo the change before you send.
 
 A characterwise or blockwise selection sends the exact characters along with
 the lines they are on, so you can ask about a single expression.

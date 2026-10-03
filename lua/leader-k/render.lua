@@ -237,7 +237,7 @@ end
 ---@return integer r0, integer r1 0-based rows, inclusive.
 function M.region(s)
   local m = vim.api.nvim_buf_get_extmark_by_id(s.buf, s.mark_ns, s.mark, { details = true })
-  if not m[1] then
+  if not m[1] or m[3].invalid then
     return 0, -1
   end
   local r0, r1 = m[1], m[3].end_row or m[1]
