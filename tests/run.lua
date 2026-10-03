@@ -727,8 +727,8 @@ test("the panel sets your messages apart from the answers", function()
   local function column(lnum)
     return vim.api.nvim_eval_statusline(vim.wo[win].statuscolumn, { winid = win, use_statuscol_lnum = lnum }).str
   end
-  eq(column(2), "▎ ", "bar beside the message")
-  eq(column(#text), "  ", "no bar beside the answer")
+  eq(column(2), "▎", "bar beside the message")
+  eq(column(#text), " ", "no bar beside the answer")
   s:destroy()
 end)
 

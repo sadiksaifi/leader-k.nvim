@@ -312,7 +312,7 @@ local function open_panel(s)
   vim.wo[awin].statuscolumn = "%!v:lua.require'leader-k.answer'.column()"
   vim.wo[iwin].winfixheight = true
   -- A plain box under the divider, its text in line with the transcript's.
-  vim.wo[iwin].statuscolumn = "  "
+  vim.wo[iwin].statuscolumn = " "
   -- The rows around the box stay plain: a blank row above the divider and a
   -- dim line of hints below the box, where windows have status lines.
   vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal"
@@ -354,9 +354,9 @@ end
 function M.column()
   local rows = user_rows[vim.api.nvim_win_get_buf(vim.g.statusline_winid)]
   if rows and rows[vim.v.lnum] then
-    return "%#LeaderKUserEdge#▎%#LeaderKUser# "
+    return "%#LeaderKUserEdge#▎"
   end
-  return "  "
+  return " "
 end
 
 ---@param s leader_k.Session
