@@ -53,7 +53,8 @@ the change.
 
 A characterwise or blockwise selection (|v| or |CTRL-V|) sends the lines it
 touches plus the selected characters. Only those characters are
-highlighted. An edit still replaces whole lines.
+highlighted. A block that covers part of a tab or a wide character takes
+the whole character. An edit still replaces whole lines.
 
 To force one kind of reply, pass a mode: >lua
     require("leader-k").open({ mode = "edit" }) -- always propose an edit
@@ -128,7 +129,8 @@ KEYS                                                        *leader-k-keys*
   keys.refine  <leader>k  Move into the panel input to follow up on a
                           proposal or answer.
 
-Outside their session, or off screen, the keys keep their usual meaning.
+Outside their session, off screen, or while every selected line is
+replaced, the keys keep their usual meaning.
 
 In the panel transcript: q ends the conversation; keys.refine, i, or a
 moves into the input; keys.cancel stops a running request.

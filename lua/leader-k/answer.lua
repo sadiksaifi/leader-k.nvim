@@ -186,21 +186,44 @@ local function set_wo(win, name, value)
   end
 end
 
+---@param s leader_k.Session
+---@param win integer
+---@return boolean Can show the code: a normal window outside the panel that shows the code or, unless it was the code's own window, a file.
+local function code_slot(s, win)
+  return valid(win)
+    and win ~= s.answer_win
+    and win ~= s.input_win
+    and vim.api.nvim_win_get_config(win).relative == ""
+    and (win == s.win or vim.bo[vim.api.nvim_win_get_buf(win)].buftype == "")
+end
+
 ---Moves focus back to the code. When no window shows the code edits
----target, the window it was selected in shows it again.
+---target, the window it was selected in shows it again, or another file
+---window of the tab, or a new window left of the panel.
 ---@param s leader_k.Session
 function M.to_code(s)
   vim.cmd.stopinsert()
   local code = code_window(s)
-  if not code and valid(s.win) and s.win ~= s.answer_win and s.win ~= s.input_win then
-    if pcall(vim.api.nvim_win_set_buf, s.win, s.buf) then
-      code = s.win
-      pcall(vim.api.nvim_win_set_cursor, code, { render.region(s) + 1, 0 })
+  if not code then
+    if not vim.api.nvim_buf_is_valid(s.buf) then
+      return
+    end
+    local candidates = { s.win }
+    vim.list_extend(candidates, vim.api.nvim_tabpage_list_wins(0))
+    for _, win in ipairs(candidates) do
+      if code_slot(s, win) and pcall(vim.api.nvim_win_set_buf, win, s.buf) then
+        code = win
+        break
+      end
+    end
+    code = code or vim.api.nvim_open_win(s.buf, false, { split = "left", win = -1 })
+    s.win = code
+    local r0, r1 = render.region(s)
+    if r1 >= r0 then
+      pcall(vim.api.nvim_win_set_cursor, code, { r0 + 1, 0 })
     end
   end
-  if code then
-    vim.api.nvim_set_current_win(code)
-  end
+  vim.api.nvim_set_current_win(code)
 end
 
 ---Moves focus into the follow-up input.

@@ -44,7 +44,12 @@ function M.open(opts)
       for _, piece in ipairs(region) do
         -- Positions are 1-based; the end is the last byte of the last character.
         local from, to = piece[1], piece[2]
-        focus[#focus + 1] = { from[2] - 1, from[3] - 1, to[3] }
+        if from[3] == 0 then
+          -- A block that does not reach this row's text selects none of it.
+          focus[#focus + 1] = { from[2] - 1, 0, 0 }
+        else
+          focus[#focus + 1] = { from[2] - 1, from[3] - 1, to[3] }
+        end
       end
     end
     vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)

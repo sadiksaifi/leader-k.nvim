@@ -188,12 +188,12 @@ function M.messages(turns, mode)
     { role = "system", content = M.system[mode] },
     { role = "user", content = first_message(first, turns[1].instruction, mode) },
   }
-  local buf = first.buf
+  local seen = { [first.buf] = true }
   for i = 2, #turns do
     local a = turns[i].attach
-    local full = a ~= nil and a.buf ~= buf
+    local full = a ~= nil and not seen[a.buf]
     if a then
-      buf = a.buf
+      seen[a.buf] = true
     end
     msgs[#msgs + 1] = { role = "assistant", content = reply_of(turns[i - 1]) }
     msgs[#msgs + 1] = { role = "user", content = follow_up(turns[i], turns[i - 1], mode, full) }

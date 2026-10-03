@@ -164,12 +164,14 @@ local function region_mark(buf, r0, r1)
   local last = vim.api.nvim_buf_get_lines(buf, r1, r1 + 1, false)[1] or ""
   -- Replacing every line, as a formatter that rewrites the file may, would
   -- leave the mark on one unrelated line; it is invalid instead until undo.
+  -- A single empty line has no text to replace, and deleting the line
+  -- before it would invalidate it, so it moves as before.
   return vim.api.nvim_buf_set_extmark(buf, mark_ns, r0, 0, {
     end_row = r1,
     end_col = #last,
     right_gravity = true,
     end_right_gravity = false,
-    invalidate = true,
+    invalidate = r0 ~= r1 or last ~= "",
   })
 end
 
@@ -529,6 +531,9 @@ function Session:install_maps()
       return false
     end
     local r0, r1 = render.region(self)
+    if r1 < r0 then
+      return false
+    end
     local top, bot = vim.fn.line("w0", win) - 1, vim.fn.line("w$", win) - 1
     return r1 >= top - 1 and r0 <= bot + 1
   end
@@ -846,7 +851,7 @@ function Session:remember(r0, r1, lines)
       end_col = #lines[#lines],
       right_gravity = true,
       end_right_gravity = false,
-      invalidate = true,
+      invalidate = r0 ~= r1 or lines[1] ~= "",
     }),
     turns = turns,
     ctx = self.ctx,
