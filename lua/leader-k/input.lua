@@ -38,6 +38,48 @@ local function border_rows(pwin)
   return 2
 end
 
+---Adds a sent request to the history.
+---@param t string
+function M.remember(t)
+  for i = #history, 1, -1 do
+    if history[i] == t then
+      table.remove(history, i)
+    end
+  end
+  history[#history + 1] = t
+  if #history > MAX_HISTORY then
+    table.remove(history, 1)
+  end
+end
+
+---Maps Up and Down in Insert mode to step through the history in `buf`,
+---keeping what was typed as a draft past the newest entry.
+---@param buf integer
+---@return fun() reset Starts the next recall from the newest entry.
+function M.map_history(buf)
+  local pos, draft = #history + 1, nil
+  local function recall(step)
+    if #history == 0 then
+      return
+    end
+    if pos > #history then
+      draft = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    end
+    pos = math.max(1, math.min(#history + 1, pos + step))
+    local lines = pos > #history and (draft or { "" }) or vim.split(history[pos], "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_win_set_cursor(0, { #lines, #lines[#lines] })
+  end
+  for lhs, step in pairs({ ["<Up>"] = -1, ["<Down>"] = 1 }) do
+    vim.keymap.set("i", lhs, function()
+      recall(step)
+    end, { buffer = buf, nowait = true, silent = true })
+  end
+  return function()
+    pos, draft = #history + 1, nil
+  end
+end
+
 ---@param opts leader_k.InputOpts
 function M.open(opts)
   local win = opts.win
@@ -88,8 +130,6 @@ function M.open(opts)
   vim.wo[pwin].winhighlight = "FloatFooter:LeaderKFooter"
 
   local closed = false
-  local hist_pos = #history + 1
-  local draft = nil
 
   local function text()
     return vim.trim(table.concat(vim.api.nvim_buf_get_lines(pbuf, 0, -1, false), "\n"))
@@ -148,15 +188,7 @@ function M.open(opts)
       return
     end
     if t ~= "" then
-      for i = #history, 1, -1 do
-        if history[i] == t then
-          table.remove(history, i)
-        end
-      end
-      history[#history + 1] = t
-      if #history > MAX_HISTORY then
-        table.remove(history, 1)
-      end
+      M.remember(t)
     end
     close()
     opts.on_submit(t)
@@ -168,19 +200,6 @@ function M.open(opts)
     end
     close()
     opts.on_cancel()
-  end
-
-  local function recall(step)
-    if #history == 0 then
-      return
-    end
-    if hist_pos == #history + 1 then
-      draft = vim.api.nvim_buf_get_lines(pbuf, 0, -1, false)
-    end
-    hist_pos = math.max(1, math.min(#history + 1, hist_pos + step))
-    local lines = hist_pos == #history + 1 and (draft or { "" }) or vim.split(history[hist_pos], "\n", { plain = true })
-    vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, lines)
-    vim.api.nvim_win_set_cursor(pwin, { #lines, #lines[#lines] })
   end
 
   local map = function(modes, lhs, fn)
@@ -199,12 +218,7 @@ function M.open(opts)
     return "<Esc>"
   end, { buffer = pbuf, expr = true, nowait = true, silent = true })
   map("n", "q", cancel)
-  map("i", "<Up>", function()
-    recall(-1)
-  end)
-  map("i", "<Down>", function()
-    recall(1)
-  end)
+  M.map_history(pbuf)
 
   local group = vim.api.nvim_create_augroup("leader-k.input", { clear = true })
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {

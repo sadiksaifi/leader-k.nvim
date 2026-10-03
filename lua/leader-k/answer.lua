@@ -1,14 +1,19 @@
--- The answer panel: a Markdown transcript of a session's answers, in a split
--- on the right of the editor. Focus stays in the code until the user moves it.
+-- The answer panel: a column on the right of the editor that holds a
+-- conversation once it has an answer. A Markdown transcript sits above an
+-- input for follow-ups, and the line between them shows the status. Focus
+-- stays in the code until the user moves it.
 
 local config = require("leader-k.config")
+local input = require("leader-k.input")
 local render = require("leader-k.render")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("leader-k.answer")
+local input_ns = vim.api.nvim_create_namespace("leader-k.answer.input")
 local MAX_WIDTH = 80
 local MIN_WIDTH = 30
+local MAX_INPUT = 6
 
 -- Rows (1-based) of the user's messages, per answer buffer, for the column.
 ---@type table<integer, table<integer, true>>
@@ -25,6 +30,11 @@ local function code_window(s)
     return s.win
   end
   return vim.fn.win_findbuf(s.buf)[1]
+end
+
+---@param win integer|nil
+local function valid(win)
+  return win ~= nil and vim.api.nvim_win_is_valid(win)
 end
 
 ---Each turn as its question, then its answer or a note about its edit.
@@ -70,6 +80,88 @@ local function transcript(s)
   return out, questions, notes, latest
 end
 
+---@param text string
+local function escape(text)
+  return (text:gsub("%%", "%%%%"))
+end
+
+---@param lhs string
+---@param label string
+local function hint(lhs, label)
+  return ("%%#LeaderKKey#%s%%#LeaderKHint# %s%%*"):format(escape(render.key_label(lhs)), label)
+end
+
+---What the conversation is doing, and how to stop or close it.
+---@param s leader_k.Session
+local function status(s)
+  local left, right
+  if s.state == "running" then
+    local frame, text = render.progress(s, vim.uv.now())
+    left = ("%%#LeaderKSpinner#%s%%* %s"):format(frame, escape(text))
+    right = hint(config.options.keys.cancel, "stop")
+  elseif s.state == "review" then
+    left, right = "Proposed an edit. Review it in the code.", hint("q", "close")
+  else
+    left, right = "%#LeaderKFooter#" .. escape(s.model_label or "") .. "%*", hint("q", "close")
+  end
+  return " " .. left .. "%=" .. right .. " "
+end
+
+---@param win integer
+---@param name string
+---@param value string
+local function set_wo(win, name, value)
+  if vim.wo[win][name] ~= value then
+    vim.wo[win][name] = value
+  end
+end
+
+---Moves focus back to the code.
+---@param s leader_k.Session
+function M.to_code(s)
+  vim.cmd.stopinsert()
+  local code = code_window(s)
+  if code then
+    vim.api.nvim_set_current_win(code)
+  end
+end
+
+---Moves focus into the follow-up input.
+---@param s leader_k.Session
+function M.focus_input(s)
+  if valid(s.input_win) then
+    vim.api.nvim_set_current_win(s.input_win)
+    vim.cmd.startinsert({ bang = true })
+  end
+end
+
+---@param s leader_k.Session
+local function refresh_input(s)
+  local buf, win = s.input_buf, s.input_win
+  if not (valid(win) and buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(buf, input_ns, 0, -1)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if #lines == 1 and lines[1] == "" then
+    local refine = s.state == "review"
+    local text
+    if vim.api.nvim_get_current_win() == win then
+      text = (refine and "What should change?" or "Ask a follow-up.") .. " Enter alone regenerates"
+    else
+      text = render.key_label(config.options.keys.refine) .. (refine and " to refine" or " to follow up")
+    end
+    vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, {
+      virt_text = { { text, "LeaderKPlaceholder" } },
+      virt_text_pos = "overlay",
+    })
+  end
+  local h = math.max(1, math.min(vim.api.nvim_win_text_height(win, {}).all, MAX_INPUT))
+  if vim.api.nvim_win_get_height(win) ~= h then
+    vim.api.nvim_win_set_height(win, h)
+  end
+end
+
 ---@param s leader_k.Session
 local function create_buf(s)
   local buf = vim.api.nvim_create_buf(false, true)
@@ -93,9 +185,11 @@ local function create_buf(s)
   map("q", function()
     s:destroy()
   end)
-  map(keys.refine, function()
-    s:refine()
-  end)
+  for _, lhs in ipairs({ keys.refine, "i", "a" }) do
+    map(lhs, function()
+      M.focus_input(s)
+    end)
+  end
   map(keys.cancel, function()
     if s.state == "running" then
       s:stop()
@@ -104,69 +198,119 @@ local function create_buf(s)
   return buf
 end
 
----@param text string
-local function escape(text)
-  return (text:gsub("%%", "%%%%"))
-end
-
 ---@param s leader_k.Session
-local function winbar(s)
-  local keys = config.options.keys
-  local function hint(lhs, label)
-    return ("%%#LeaderKKey#%s%%#LeaderKHint# %s"):format(escape(render.key_label(lhs)), label)
+local function create_input(s)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "leader_k_prompt"
+  pcall(vim.api.nvim_buf_set_name, buf, "leader-k://follow-up/" .. s.buf)
+  vim.b[buf].completion = false -- blink.cmp
+  local reset = input.map_history(buf)
+  local function map(modes, lhs, fn)
+    vim.keymap.set(modes, lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  return (" Answer%%#LeaderKFooter#  %s%%=%s  %s "):format(
-    escape(s.model_label or ""),
-    hint("q", "close"),
-    hint(keys.refine, "follow up")
-  )
-end
-
----@param s leader_k.Session
----@param buf integer
-local function open_win(s, buf)
-  local width = math.max(MIN_WIDTH, math.min(MAX_WIDTH, math.floor(vim.o.columns * 0.4)))
-  local win = vim.api.nvim_open_win(buf, false, { split = "right", win = -1, width = width })
-  local wo = vim.wo[win]
-  wo.wrap, wo.linebreak, wo.breakindent = true, true, true
-  wo.conceallevel, wo.concealcursor = 2, "nc"
-  wo.number, wo.relativenumber, wo.signcolumn, wo.foldcolumn = false, false, "no", "0"
-  wo.cursorline, wo.spell, wo.list, wo.fillchars = false, false, false, "eob: "
-  wo.winfixwidth, wo.winfixbuf = true, true
-  -- The bar beside the user's messages, drawn on every screen row so it
-  -- stays unbroken where a message wraps.
-  wo.statuscolumn = "%!v:lua.require'leader-k.answer'.column()"
-  -- Closing the panel ends a conversation that has nothing else on screen.
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = s.augroup,
-    pattern = tostring(win),
-    once = true,
+  map({ "i", "n" }, "<CR>", function()
+    if s.state == "running" then
+      return
+    end
+    local text = vim.trim(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+    if s:follow_up(text) then
+      if text ~= "" then
+        input.remember(text)
+      end
+      reset()
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+    end
+  end)
+  map({ "i", "n" }, config.options.keys.cancel, function()
+    if s.state == "running" then
+      s:stop()
+    else
+      M.to_code(s)
+    end
+  end)
+  map("n", "<Esc>", function()
+    M.to_code(s)
+  end)
+  map("n", "q", function()
+    s:destroy()
+  end)
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinEnter", "WinLeave" }, {
+    buffer = buf,
     callback = function()
-      if s.answer_win ~= win then
-        return
-      end
-      s.answer_win, s.answer_buf, s.answer_lines, s.answer_shown = nil, nil, nil, nil
-      if s.state == "answered" or (s.state == "running" and s.answer_text) then
-        s:destroy()
-      end
+      -- WinLeave fires before the new window is current.
+      vim.schedule(function()
+        refresh_input(s)
+      end)
     end,
   })
-  return win
+  return buf
+end
+
+---Closing either window of the panel closes both. With nothing else on
+---screen, it also ends the conversation.
+---@param s leader_k.Session
+local function on_closed(s)
+  if s.state == "answered" or (s.state == "running" and s.answer_text) then
+    s:destroy()
+  else
+    M.close(s)
+  end
+end
+
+---@param s leader_k.Session
+local function open_panel(s)
+  local width = math.max(MIN_WIDTH, math.min(MAX_WIDTH, math.floor(vim.o.columns * 0.4)))
+  local awin = vim.api.nvim_open_win(s.answer_buf, false, { split = "right", win = -1, width = width })
+  local iwin = vim.api.nvim_open_win(s.input_buf, false, { split = "below", win = awin, height = 1 })
+  for _, win in ipairs({ awin, iwin }) do
+    local wo = vim.wo[win]
+    wo.wrap, wo.linebreak, wo.breakindent = true, true, true
+    wo.number, wo.relativenumber, wo.signcolumn, wo.foldcolumn = false, false, "no", "0"
+    wo.cursorline, wo.spell, wo.list, wo.fillchars = false, false, false, "eob: "
+    wo.winfixwidth, wo.winfixbuf = true, true
+    wo.statuscolumn, wo.winbar = "", ""
+    vim.api.nvim_create_autocmd("WinClosed", {
+      group = s.augroup,
+      pattern = tostring(win),
+      once = true,
+      callback = function()
+        if s.answer_win == win or s.input_win == win then
+          on_closed(s)
+        end
+      end,
+    })
+  end
+  vim.wo[awin].conceallevel, vim.wo[awin].concealcursor = 2, "nc"
+  -- The bar beside the user's messages, drawn on every screen row so it
+  -- stays unbroken where a message wraps.
+  vim.wo[awin].statuscolumn = "%!v:lua.require'leader-k.answer'.column()"
+  vim.wo[iwin].winfixheight = true
+  -- The input wears the color of the user's messages it turns into.
+  vim.wo[iwin].winhighlight = "Normal:LeaderKUser,NormalNC:LeaderKUser,EndOfBuffer:LeaderKUser"
+  vim.wo[iwin].statuscolumn = "%#LeaderKUserEdge#▎%#LeaderKUser# "
+  vim.wo[iwin].statusline = (" %s  %s  %s"):format(
+    hint("<CR>", "send"),
+    hint("<Up>", "history"),
+    hint("<Esc>", "back to the code")
+  )
+  s.answer_win, s.input_win = awin, iwin
 end
 
 ---@param s leader_k.Session
 function M.close(s)
-  local win = s.answer_win
+  local wins = { s.answer_win, s.input_win }
   s.answer_win, s.answer_buf, s.answer_lines, s.answer_shown = nil, nil, nil, nil
-  if win and vim.api.nvim_win_is_valid(win) then
-    if vim.api.nvim_get_current_win() == win then
-      local code = code_window(s)
-      if code then
-        vim.api.nvim_set_current_win(code)
+  s.input_win, s.input_buf = nil, nil
+  local cur = vim.api.nvim_get_current_win()
+  for _, win in ipairs(wins) do
+    if valid(win) then
+      if win == cur then
+        M.to_code(s)
       end
+      -- The last window cannot be closed; the buffer then stays until replaced.
+      pcall(vim.api.nvim_win_close, win, true)
     end
-    -- The last window cannot be closed; the buffer then stays until replaced.
-    pcall(vim.api.nvim_win_close, win, true)
   end
 end
 
@@ -182,22 +326,32 @@ end
 
 ---@param s leader_k.Session
 ---@return boolean
+function M.docked(s)
+  return valid(s.answer_win)
+end
+
+---Whether focus is in the panel.
+---@param s leader_k.Session
+---@return boolean
 function M.focused(s)
-  return s.answer_win ~= nil and vim.api.nvim_get_current_win() == s.answer_win
+  local cur = vim.api.nvim_get_current_win()
+  return cur == s.answer_win or cur == s.input_win
 end
 
 ---Opens or updates the panel to match the session. Once open, it stays for
 ---the rest of the session, through turns that propose edits.
 ---@param s leader_k.Session
 function M.sync(s)
-  local awin = s.answer_win
-  local open = awin ~= nil and vim.api.nvim_win_is_valid(awin)
+  local open = valid(s.answer_win)
   if not open and not (s.state == "answered" or (s.state == "running" and s.answer_text ~= nil)) then
     return
   end
 
   if not (s.answer_buf and vim.api.nvim_buf_is_valid(s.answer_buf)) then
     s.answer_buf, s.answer_lines = create_buf(s), nil
+  end
+  if not (s.input_buf and vim.api.nvim_buf_is_valid(s.input_buf)) then
+    s.input_buf = create_input(s)
   end
   local abuf = s.answer_buf
   local lines, questions, notes, latest = transcript(s)
@@ -224,18 +378,21 @@ function M.sync(s)
   end
 
   if not open then
-    awin = open_win(s, abuf)
-    s.answer_win = awin
+    open_panel(s)
   end
-  local bar = winbar(s)
-  if vim.wo[awin].winbar ~= bar then
-    vim.wo[awin].winbar = bar
-  end
+  local awin, iwin = s.answer_win, s.input_win
+  -- The status sits on the line between the transcript and the input: the
+  -- transcript's status line when windows have one, else the input's winbar.
+  local bar = status(s)
+  local own = vim.o.laststatus == 1 or vim.o.laststatus == 2
+  set_wo(awin, "statusline", own and bar or "")
+  set_wo(iwin, "winbar", own and "" or bar)
+  refresh_input(s)
 
   -- Follow the stream, then show the latest turn from its question, with
-  -- earlier turns above it when they fit, unless the user is reading in the
-  -- panel.
-  if not M.focused(s) then
+  -- earlier turns above it when they fit, unless the user is reading the
+  -- transcript.
+  if vim.api.nvim_get_current_win() ~= awin then
     if s.state == "running" then
       vim.api.nvim_win_set_cursor(awin, { #lines, 0 })
     elseif s.answer_shown ~= #s.turns then

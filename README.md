@@ -92,6 +92,11 @@ request. The model decides how to reply:
 - A question, such as "why multiply here?", comes back as a Markdown answer in
   a panel on the right. The buffer is never changed.
 
+Once there is an answer, the panel holds the conversation: the transcript,
+the status, and an input for follow-ups. The code keeps the selection
+marked and shows a diff when a follow-up proposes an edit, which you review
+in the code.
+
 Follow-ups continue the same conversation and can switch between the two:
 ask "why is this slow?", then "fix it". Asking again on lines you just
 accepted, within two minutes, continues that conversation too.
@@ -107,8 +112,9 @@ the lines they are on, so you can ask about a single expression.
 | Prompt | `<C-c>` | Cancel |
 | Review | `<CR>` | Accept proposal |
 | Review / answer / request | `<BS>` | Reject proposal / close answer / stop request |
-| Review / answer | `<leader>k` | Follow up |
-| Answer panel | `q` | Close the answer |
+| Review / answer | `<leader>k` | Follow up (in the panel when it is open) |
+| Panel | `q` | Close the answer |
+| Panel input | `<CR>` / `<Up>` / `<Esc>` | Send / recall / back to the code |
 | Request | `<C-c>` | Stop request |
 
 To always get one kind of reply, map the mode explicitly:

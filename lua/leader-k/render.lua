@@ -17,6 +17,8 @@ local function key_label(lhs)
     ["<esc>"] = "Esc",
     ["<tab>"] = "Tab",
     ["<space>"] = "Space",
+    ["<up>"] = "Up",
+    ["<down>"] = "Down",
   }
   local lower = lhs:lower()
   if named[lower] then
@@ -216,6 +218,23 @@ local function virt_line(line, spans, emph, base, width, emph_group, cursor)
   return chunks
 end
 
+---The spinner frame and what a running request is doing.
+---@param s leader_k.Session
+---@param now integer
+---@return string frame, string text
+function M.progress(s, now)
+  local frame = SPINNER[math.floor(now / 80) % #SPINNER + 1]
+  if s.phase == "waiting" then
+    return frame, "Waiting for " .. s.model_label
+  elseif s.phase == "thinking" then
+    return frame, "Thinking"
+  elseif s.phase == "answering" then
+    return frame, "Answering"
+  end
+  local n = s.proposal and #s.proposal or 0
+  return frame, ("Writing %d %s"):format(n, n == 1 and "line" or "lines")
+end
+
 ---@param s leader_k.Session
 ---@param now integer
 ---@param width integer Text area width of the window.
@@ -237,31 +256,14 @@ local function header(s, now, width)
   end
 
   if s.state == "running" then
-    local frame = SPINNER[math.floor(now / 80) % #SPINNER + 1]
+    local frame, text = M.progress(s, now)
     add(frame .. " ", "LeaderKSpinner")
-    if s.phase == "waiting" then
-      add("Waiting for " .. s.model_label, "LeaderKStatus")
-    elseif s.phase == "thinking" then
-      add("Thinking", "LeaderKStatus")
-    elseif s.phase == "answering" then
-      add("Answering", "LeaderKStatus")
-    else
-      local n = s.proposal and #s.proposal or 0
-      add(("Writing %d %s"):format(n, n == 1 and "line" or "lines"), "LeaderKStatus")
-    end
+    add(text, "LeaderKStatus")
     if instruction ~= "" then
       add("  " .. instruction, "LeaderKInstruction")
     end
     add("  ", "")
     hint(o.keys.cancel, "stop")
-  elseif s.state == "answered" then
-    add("Answered", "LeaderKStatus")
-    if instruction ~= "" then
-      add("  " .. instruction, "LeaderKInstruction")
-    end
-    add("  ", "")
-    hint(o.keys.reject, "close")
-    hint(o.keys.refine, "follow up")
   elseif s.state == "review" then
     if s.stale then
       add("Selection edited after the request.", "LeaderKWarn")
@@ -355,7 +357,12 @@ function M.draw(s)
     if s.state == "answered" or (s.state == "running" and not s.proposal) then
       mark_focus("LeaderKFocus")
     end
-    push(above, r0, header(s, now, win_width))
+    -- With the answer panel open, the conversation's status lives there;
+    -- the code shows a header only for a proposal to accept or reject.
+    local docked = s.answer_win ~= nil and vim.api.nvim_win_is_valid(s.answer_win)
+    if not docked or s.state == "review" then
+      push(above, r0, header(s, now, win_width))
+    end
     for row = r0, r1 do
       line_marks[row] = "bar"
     end

@@ -546,10 +546,14 @@ local function answer_text(s)
   return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false), "\n")
 end
 
+---Types a follow-up where refine puts it, then returns to the code window.
 local function follow_up(s, text)
+  local code = vim.api.nvim_get_current_win()
   s:refine()
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { text })
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  vim.cmd.stopinsert()
+  vim.api.nvim_set_current_win(code)
 end
 
 test("ask streams a Markdown answer into a panel and leaves the code alone", function()
@@ -630,13 +634,50 @@ test("the answer is a split on the right; closing it ends the answer", function(
   lk.run(3, 9, "why?", { mode = "ask" })
   local s = assert(session.get(0))
   wait_state(s, "answered")
-  local win = assert(s.answer_win)
+  local win, iwin = assert(s.answer_win), assert(s.input_win)
   eq(vim.api.nvim_win_get_config(win).relative, "", "a split, not a float")
-  eq(vim.fn.winlayout(), { "row", { { "leaf", code_win }, { "leaf", win } } })
-  truthy(vim.wo[win].winbar:find("Answer", 1, true), vim.wo[win].winbar)
-  vim.api.nvim_win_close(win, true)
-  eq(session.get(0), nil, "closing the panel closes the answer")
+  eq(vim.fn.winlayout(), { "row", { { "leaf", code_win }, { "col", { { "leaf", win }, { "leaf", iwin } } } } })
+  eq(vim.api.nvim_get_current_win(), code_win, "focus stays in the code")
+  truthy(vim.wo[win].statusline:find("close", 1, true), vim.wo[win].statusline)
+  local header = false
+  for _, m in ipairs(marks()) do
+    header = header or m[4].virt_lines_above == true
+  end
+  eq(header, false, "no header in the code while the panel shows the answer")
+  vim.api.nvim_win_close(iwin, true)
+  eq(session.get(0), nil, "closing the input closes the answer")
+  eq(vim.api.nvim_win_is_valid(win), false, "and the transcript")
   eq(#marks(), 0)
+end)
+
+test("follow-ups are typed in the panel; an edit moves focus to the code", function()
+  use("route")
+  lines(SAMPLE)
+  local code_win = vim.api.nvim_get_current_win()
+  lk.run(3, 9, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  vim.cmd("normal! 3G")
+  vim.api.nvim_feedkeys(vim.keycode("<leader>k"), "x", false)
+  eq(vim.api.nvim_get_current_win(), s.input_win, "the refine key focuses the panel input")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "explain more" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  wait_state(s, "answered")
+  eq(vim.api.nvim_get_current_win(), s.input_win, "focus stays in the input after an answer")
+  eq(vim.api.nvim_buf_get_lines(0, 0, -1, false), { "" }, "the input is cleared")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "change it to ipairs" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  wait_state(s, "review")
+  eq(vim.api.nvim_get_current_win(), code_win, "a proposal is reviewed in the code")
+  truthy(vim.wo[s.answer_win].statusline:find("Review it in the code", 1, true), vim.wo[s.answer_win].statusline)
+  local header = false
+  for _, m in ipairs(marks()) do
+    header = header or m[4].virt_lines_above == true
+  end
+  truthy(header, "the code shows the review header")
+  s:accept()
+  eq(vim.api.nvim_win_is_valid(code_win), true)
+  eq(#vim.api.nvim_list_wins(), 1, "accepting closes the panel")
 end)
 
 test("the panel sets your messages apart from the answers", function()

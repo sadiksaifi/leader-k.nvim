@@ -22,11 +22,15 @@ During review: Enter accepts, Backspace rejects, <leader>k follows up, and
 <C-c> stops a running request. A changed selection cannot be accepted until
 that edit is undone. Errors appear in |:messages|.
 
-While an answer is shown: Backspace closes it and <leader>k follows up.
-Focus stays in the code; move into the panel with the usual window commands,
-such as <C-w>l. In the panel, q closes the answer and <leader>k follows up.
-Closing the panel window also closes the answer. The panel stays open
-through follow-ups that propose edits, until the session ends.
+Once there is an answer, the panel holds the conversation. Its transcript
+sits above an input for follow-ups, and the line between them shows the
+status. The code keeps the selection marked; it shows a header and a diff
+only when a follow-up proposes an edit, and focus then moves to the code
+for review. The panel stays open until the session ends.
+
+While an answer is shown: Backspace closes it and <leader>k moves into the
+panel input. Focus stays in the code until you move it. Closing either
+panel window also closes the answer.
 
 Follow-ups continue one conversation and can switch between edits and
 answers. Enter alone on a follow-up regenerates the last reply. After you
@@ -113,8 +117,11 @@ Outside their session, or off screen, the keys keep their usual meaning.
 In the prompt: Enter sends; Up/Down recall requests; <C-c> cancels.
 Esc enters Normal mode, where Esc or q cancels.
 
-In the answer panel: q closes the answer, keys.refine follows up, and
-keys.cancel stops a running request.
+In the panel transcript: q closes the answer; keys.refine, i, or a moves
+into the input; keys.cancel stops a running request. In the panel input:
+Enter sends, and Enter alone regenerates the last reply; Up/Down recall
+requests; keys.cancel stops a running request or returns to the code. In
+Normal mode, Esc returns to the code and q closes the answer.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*

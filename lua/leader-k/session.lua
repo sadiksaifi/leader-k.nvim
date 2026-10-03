@@ -95,7 +95,9 @@ end
 ---@field answer_win integer|nil
 ---@field answer_buf integer|nil
 ---@field answer_lines string|nil Text the answer buffer holds.
----@field answer_shown integer|nil Turn the float last scrolled to.
+---@field answer_shown integer|nil Turn the panel last scrolled to.
+---@field input_win integer|nil The panel's follow-up input.
+---@field input_buf integer|nil
 ---@field error string|nil The last failure, kept for callers and tests.
 ---@field prev table|nil The review a refine started from, restored if it fails.
 ---@field stale boolean
@@ -172,8 +174,9 @@ function Session:set_reserve(rows)
 end
 
 function Session:draw()
-  render.draw(self)
+  -- The panel first: whether it is open decides what the code shows.
   answer.sync(self)
+  render.draw(self)
 end
 
 ---Wraps code in a Markdown fence for the answer view.
@@ -640,6 +643,10 @@ function Session:finish(finish_reason)
   self.state, self.phase = "review", nil
   self.stale = not same_lines(self:region_lines(), self.original)
   self:draw()
+  -- A proposal is reviewed in the code.
+  if answer.focused(self) then
+    answer.to_code(self)
+  end
   self:notify_ready("proposal")
 end
 
@@ -709,13 +716,46 @@ function Session:accept()
   end
 end
 
----Asks for a follow-up to the proposal or answer on screen.
+---Sends a follow-up to the proposal or answer on screen. Empty text
+---regenerates the last reply.
+---@param text string
+---@return boolean sent
+function Session:follow_up(text)
+  if sessions[self.buf] ~= self or (self.state ~= "review" and self.state ~= "answered") then
+    return false
+  end
+  local last = self.turns[#self.turns]
+  local answered = self.state == "answered"
+  self:save_review()
+  if answered then
+    -- The code may have changed while the answer was read. An edit
+    -- replaces what is there now.
+    self.original, self.stale = self:region_lines(), false
+  end
+  if text == "" then
+    last.proposal, last.answer = nil, nil -- Regenerate the same turn.
+  else
+    local turn = { instruction = text }
+    if not same_lines(self.original, self.seen) then
+      self.seen, turn.selection = self.original, self.original
+    end
+    table.insert(self.turns, turn)
+  end
+  self:send()
+  return true
+end
+
+---Asks for a follow-up to the proposal or answer on screen: in the answer
+---panel when it is open, else in a prompt at the selection.
 function Session:refine()
   if self.state ~= "review" and self.state ~= "answered" then
     return
   end
+  if answer.docked(self) then
+    answer.focus_input(self)
+    return
+  end
   local r0, r1 = render.region(self)
-  local last = self.turns[#self.turns]
   local win = vim.api.nvim_get_current_win()
   if vim.api.nvim_win_get_buf(win) ~= self.buf then
     win = vim.api.nvim_win_is_valid(self.win) and vim.api.nvim_win_get_buf(self.win) == self.buf and self.win
@@ -737,25 +777,7 @@ function Session:refine()
       self:set_reserve(rows)
     end,
     on_submit = function(text)
-      if sessions[self.buf] ~= self then
-        return
-      end
-      self:save_review()
-      if answered then
-        -- The code may have changed while the answer was read. An edit
-        -- replaces what is there now.
-        self.original, self.stale = self:region_lines(), false
-      end
-      if text == "" then
-        last.proposal, last.answer = nil, nil -- Regenerate the same turn.
-      else
-        local turn = { instruction = text }
-        if not same_lines(self.original, self.seen) then
-          self.seen, turn.selection = self.original, self.original
-        end
-        table.insert(self.turns, turn)
-      end
-      self:send()
+      self:follow_up(text)
     end,
     on_cancel = function() end,
   })
