@@ -143,9 +143,8 @@ HIGHLIGHTS                                             *leader-k-highlights*
   LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
   LeaderKPlaceholder  LeaderKFooter  LeaderKFlash  LeaderKFocus
 
-In the answer panel, your messages and the input use the color of
-LeaderKUserBar for the bar on their left and LeaderKUser for their
-background. LeaderKUserBar links to Function. LeaderKUser blends the
+In the answer panel, your messages use the color of LeaderKUserBar for
+the bar on their left and LeaderKUser for their background. LeaderKUserBar links to Function. LeaderKUser blends the
 background of Normal with the color of LeaderKUserBar at 20%, or links to
 CursorLine when either color is missing. Notes such as "Proposed an edit."
 use LeaderKNote. The divider above the input uses LeaderKDivider, the color

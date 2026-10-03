@@ -311,16 +311,15 @@ local function open_panel(s)
   -- stays unbroken where a message wraps.
   vim.wo[awin].statuscolumn = "%!v:lua.require'leader-k.answer'.column()"
   vim.wo[iwin].winfixheight = true
-  -- The input wears the color of the user's messages it turns into.
-  vim.wo[iwin].winhighlight = "Normal:LeaderKUser,NormalNC:LeaderKUser,EndOfBuffer:LeaderKUser"
-  vim.wo[iwin].statuscolumn = "%#LeaderKUserEdge#▎%#LeaderKUser# "
+  -- A plain box under the divider, its text in line with the transcript's.
+  vim.wo[iwin].statuscolumn = "  "
   -- The rows around the box stay plain: a blank row above the divider and a
   -- dim line of hints below the box, where windows have status lines.
   vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal,WinSeparator:Normal"
   vim.wo[awin].fillchars = "eob: ,stl: ,stlnc: ,horiz: ,horizup: ,horizdown: "
   vim.wo[awin].statusline = " "
-  vim.wo[iwin].winhighlight = vim.wo[iwin].winhighlight
-    .. ",WinBar:LeaderKDivider,WinBarNC:LeaderKDivider,StatusLine:LeaderKDivider,StatusLineNC:LeaderKDivider"
+  vim.wo[iwin].winhighlight =
+    "WinBar:LeaderKDivider,WinBarNC:LeaderKDivider,StatusLine:LeaderKDivider,StatusLineNC:LeaderKDivider"
   vim.wo[iwin].statusline = (" %s  %s  %s"):format(
     hint("<CR>", "send"),
     hint("<Up>", "history"),
