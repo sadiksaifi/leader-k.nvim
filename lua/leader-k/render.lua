@@ -357,10 +357,9 @@ function M.draw(s)
     if s.state == "answered" or (s.state == "running" and not s.proposal) then
       mark_focus("LeaderKFocus")
     end
-    -- With the answer panel open, the conversation's status lives there;
-    -- the code shows a header only for a proposal to accept or reject.
-    local docked = s.answer_win ~= nil and vim.api.nvim_win_is_valid(s.answer_win)
-    if not docked or s.state == "review" then
+    -- The panel shows the conversation's status; the code shows a header
+    -- only for a proposal to accept or reject.
+    if s.state == "review" then
       push(above, r0, header(s, now, win_width))
     end
     for row = r0, r1 do
@@ -459,11 +458,6 @@ function M.draw(s)
       end
     end
     ::continue::
-  end
-
-  -- Blank rows for the instruction float, closest to the selection.
-  for _ = 1, s.reserve or 0 do
-    push(above, r0, { { "", "" } })
   end
 
   for row, vls in pairs(above) do

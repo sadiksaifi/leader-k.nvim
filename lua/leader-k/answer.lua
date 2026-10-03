@@ -1,7 +1,7 @@
--- The answer panel: a column on the right of the editor that holds a
--- conversation once it has an answer. A Markdown transcript sits above an
--- input for follow-ups. A dim divider with the status tops the input. Focus
--- stays in the code until the user moves it.
+-- The panel: a column on the right of the editor that holds the
+-- conversation from its start to its end. A Markdown transcript sits above
+-- an input for requests. A dim divider with the status tops the input, and
+-- the selection attached to the next message shows above the text.
 
 local config = require("leader-k.config")
 local input = require("leader-k.input")
@@ -14,6 +14,11 @@ local input_ns = vim.api.nvim_create_namespace("leader-k.answer.input")
 local MAX_WIDTH = 80
 local MIN_WIDTH = 30
 local MAX_INPUT = 6
+
+-- Placeholders for the first request, and for one that resumes an accepted
+-- conversation.
+local REQUEST = { auto = "Ask, or describe a change.", edit = "Describe the change.", ask = "Ask a question." }
+local FOLLOW_UP = { auto = "Ask, or describe a change.", edit = "What should change?", ask = "Ask a follow-up." }
 
 -- Rows (1-based) of the user's messages, per answer buffer, for the column.
 ---@type table<integer, table<integer, true>>
@@ -35,6 +40,17 @@ end
 ---@param win integer|nil
 local function valid(win)
   return win ~= nil and vim.api.nvim_win_is_valid(win)
+end
+
+---Names a selection, such as "lines 3-9 of sample.lua".
+---@param path string
+---@param r0 integer First row, 0-based.
+---@param r1 integer Last row, 0-based.
+---@param part boolean Only some characters of the rows are selected.
+---@return string
+function M.label(path, r0, r1, part)
+  local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
+  return ("Attached: %s%s of %s"):format(part and "part of " or "", where, vim.fn.fnamemodify(path, ":t"))
 end
 
 ---Each turn as its question, then its answer or a note about its edit.
@@ -66,6 +82,11 @@ local function transcript(s)
       -- A tinted blank row above and below pads the message. The blank row
       -- below also keeps it out of the answer's first Markdown paragraph.
       ask("")
+      local a = turn.attach
+      if a then
+        notes[#notes + 1] = #out
+        ask(M.label(a.path, a.first_row - 1, a.first_row + math.max(#a.selection, 1) - 2, a.focus ~= nil))
+      end
       for _, l in ipairs(vim.split(turn.instruction, "\n", { plain = true })) do
         ask(l)
       end
@@ -128,11 +149,18 @@ local function set_wo(win, name, value)
   end
 end
 
----Moves focus back to the code.
+---Moves focus back to the code. When no window shows the code edits
+---target, the window it was selected in shows it again.
 ---@param s leader_k.Session
 function M.to_code(s)
   vim.cmd.stopinsert()
   local code = code_window(s)
+  if not code and valid(s.win) and s.win ~= s.answer_win and s.win ~= s.input_win then
+    if pcall(vim.api.nvim_win_set_buf, s.win, s.buf) then
+      code = s.win
+      pcall(vim.api.nvim_win_set_cursor, code, { render.region(s) + 1, 0 })
+    end
+  end
   if code then
     vim.api.nvim_set_current_win(code)
   end
@@ -155,17 +183,29 @@ local function refresh_input(s)
   end
   vim.api.nvim_buf_clear_namespace(buf, input_ns, 0, -1)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  -- A blank row above and below the text gives it room inside the box.
+  -- A row above and below the text gives it room inside the box. The row
+  -- above names the selection sent with the next message.
+  local attached = s:attachment()
   local pad = { { { "", "" } } }
-  vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, { virt_lines = pad, virt_lines_above = true })
+  vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, {
+    virt_lines = attached and { { { attached, "LeaderKNote" } } } or pad,
+    virt_lines_above = true,
+  })
   vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, { virt_lines = pad })
   if #lines == 1 and lines[1] == "" then
-    local refine = s.state == "review"
+    local focused = vim.api.nvim_get_current_win() == win
     local text
-    if vim.api.nvim_get_current_win() == win then
-      text = (refine and "What should change?" or "Ask a follow-up.") .. " Enter alone regenerates"
+    if s.state == "prompt" then
+      local resumed = #s.turns > 0
+      text = resumed and FOLLOW_UP[s.mode] or REQUEST[s.mode]
+      text = focused and (text .. " Enter sends, Esc cancels")
+        or (render.key_label(config.options.keys.refine) .. " to continue")
+    elseif s.state == "review" then
+      text = focused and "What should change? Enter alone regenerates"
+        or (render.key_label(config.options.keys.refine) .. " to refine")
     else
-      text = render.key_label(config.options.keys.refine) .. (refine and " to refine" or " to follow up")
+      text = focused and "Ask a follow-up. Enter alone regenerates"
+        or (render.key_label(config.options.keys.refine) .. " to follow up")
     end
     vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, {
       virt_text = { { text, "LeaderKPlaceholder" } },
@@ -191,7 +231,7 @@ end
 local function create_buf(s)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
-  pcall(vim.api.nvim_buf_set_name, buf, "leader-k://answer/" .. s.buf)
+  pcall(vim.api.nvim_buf_set_name, buf, "leader-k://transcript")
   vim.bo[buf].filetype = "markdown"
   -- Highlight even when the user's config does not start tree-sitter for
   -- Markdown. Fenced code gets its language's colors through injections.
@@ -228,7 +268,7 @@ local function create_input(s)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = "leader_k_prompt"
-  pcall(vim.api.nvim_buf_set_name, buf, "leader-k://follow-up/" .. s.buf)
+  pcall(vim.api.nvim_buf_set_name, buf, "leader-k://input")
   vim.b[buf].completion = false -- blink.cmp
   local reset = input.map_history(buf)
   local function map(modes, lhs, fn)
@@ -239,7 +279,7 @@ local function create_input(s)
       return
     end
     local text = vim.trim(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
-    if s:follow_up(text) then
+    if s:submit(text) then
       if text ~= "" then
         input.remember(text)
       end
@@ -257,6 +297,22 @@ local function create_input(s)
   map("n", "<Esc>", function()
     M.to_code(s)
   end)
+  -- With nothing typed, Esc cancels a new conversation or returns to the
+  -- code. Otherwise it goes to Normal mode for editing, as usual.
+  vim.keymap.set("i", "<Esc>", function()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    if #lines > 1 or lines[1] ~= "" then
+      return "<Esc>"
+    end
+    vim.schedule(function()
+      if s.state == "prompt" then
+        s:destroy()
+      else
+        M.to_code(s)
+      end
+    end)
+    return ""
+  end, { buffer = buf, expr = true, nowait = true, silent = true })
   map("n", "q", function()
     s:destroy()
   end)
@@ -270,17 +326,6 @@ local function create_input(s)
     end,
   })
   return buf
-end
-
----Closing either window of the panel closes both. With nothing else on
----screen, it also ends the conversation.
----@param s leader_k.Session
-local function on_closed(s)
-  if s.state == "answered" or (s.state == "running" and s.answer_text) then
-    s:destroy()
-  else
-    M.close(s)
-  end
 end
 
 ---@param s leader_k.Session
@@ -300,8 +345,9 @@ local function open_panel(s)
       pattern = tostring(win),
       once = true,
       callback = function()
+        -- Closing either window of the panel ends the conversation.
         if s.answer_win == win or s.input_win == win then
-          on_closed(s)
+          s:destroy()
         end
       end,
     })
@@ -337,15 +383,25 @@ function M.close(s)
   local wins = { s.answer_win, s.input_win }
   s.answer_win, s.answer_buf, s.answer_lines, s.answer_shown = nil, nil, nil, nil
   s.input_win, s.input_buf = nil, nil
+  local live = vim.tbl_filter(valid, wins)
+  if #live == 0 then
+    return
+  end
+  -- Wiping the code's buffer can close every window but the panel's. The
+  -- last window cannot be closed, so an empty one takes the panel's place.
+  local others = #vim.api.nvim_list_tabpages() > 1
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(live[1]))) do
+    others = others or not vim.tbl_contains(live, win)
+  end
+  if not others then
+    vim.api.nvim_open_win(vim.api.nvim_create_buf(true, false), true, { split = "left", win = -1 })
+  end
   local cur = vim.api.nvim_get_current_win()
-  for _, win in ipairs(wins) do
-    if valid(win) then
-      if win == cur then
-        M.to_code(s)
-      end
-      -- The last window cannot be closed; the buffer then stays until replaced.
-      pcall(vim.api.nvim_win_close, win, true)
+  for _, win in ipairs(live) do
+    if win == cur then
+      M.to_code(s)
     end
+    pcall(vim.api.nvim_win_close, win, true)
   end
 end
 
@@ -373,14 +429,13 @@ function M.focused(s)
   return cur == s.answer_win or cur == s.input_win
 end
 
----Opens or updates the panel to match the session. Once open, it stays for
----the rest of the session, through turns that propose edits.
+---Opens or updates the panel to match the session.
 ---@param s leader_k.Session
 function M.sync(s)
-  local open = valid(s.answer_win)
-  if not open and not (s.state == "answered" or (s.state == "running" and s.answer_text ~= nil)) then
+  if s.state == "closed" then
     return
   end
+  local open = valid(s.answer_win)
 
   if not (s.answer_buf and vim.api.nvim_buf_is_valid(s.answer_buf)) then
     s.answer_buf, s.answer_lines = create_buf(s), nil
@@ -422,7 +477,7 @@ function M.sync(s)
   -- Follow the stream, then show the latest turn from its question, with
   -- earlier turns above it when they fit, unless the user is reading the
   -- transcript.
-  if vim.api.nvim_get_current_win() ~= awin then
+  if vim.api.nvim_get_current_win() ~= awin and #lines > 0 then
     if s.state == "running" then
       vim.api.nvim_win_set_cursor(awin, { #lines, 0 })
     elseif s.answer_shown ~= #s.turns then

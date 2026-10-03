@@ -10,32 +10,39 @@ REQUIREMENTS                                        *leader-k-requirements*
 USE                                                          *leader-k-use*
 
 Map <leader>k to require("leader-k").open(). In Visual mode it starts on the
-selection; in Normal mode, on the current line. Type a request and press
-Enter. The model decides how to reply:
+selection; in Normal mode, on the current line. A panel opens on the right
+of the editor with the selection attached and an input for your request.
+Type a request and press Enter. The model decides how to reply:
 
   A change      A proposed edit, shown inline as a diff. Accepting applies
                 it to the buffer.
-  A question    A Markdown answer in a panel on the right. The buffer is
-                not changed.
+  A question    A Markdown answer in the panel. The buffer is not changed.
 
-During review: Enter accepts, Backspace rejects, <leader>k follows up, and
-<C-c> stops a running request. A changed selection cannot be accepted until
-that edit is undone. Errors appear in |:messages|.
+The panel holds the conversation. Its transcript sits above the input, and
+a dim divider above the input shows the status. The code keeps the
+selection marked; it shows a header and a diff only when a reply proposes
+an edit, and focus then moves to the code for review.
 
-Once there is an answer, the panel holds the conversation. Its transcript
-sits above an input for follow-ups, and a dim divider above the input
-shows the status. The code keeps the selection marked; it shows a header
-and a diff only when a follow-up proposes an edit, and focus then moves to
-the code for review. The panel stays open until the session ends.
+During review: Enter accepts, Backspace rejects, <leader>k moves into the
+panel input to refine, and <C-c> stops a running request. A changed
+selection cannot be accepted until that edit is undone. Errors appear in
+|:messages|.
 
-While an answer is shown: Backspace closes it and <leader>k moves into the
-panel input. Focus stays in the code until you move it. Closing either
-panel window also closes the answer.
+Accepting or rejecting a proposal ends the conversation, and so do q in the
+panel and closing either panel window. Backspace in the code also closes an
+answer. One conversation runs at a time.
 
-Follow-ups continue one conversation and can switch between edits and
+Follow-ups continue the conversation and can switch between edits and
 answers. Enter alone on a follow-up regenerates the last reply. After you
 accept a proposal, starting again on the same lines, or in Normal mode on a
 line inside them, continues the conversation for two minutes.
+
+During a conversation, <leader>k in Visual mode attaches the selection, in
+any buffer, to the next message. The input names it above the text, for
+example "Attached: lines 3-9 of sample.lua", and the transcript keeps that
+line with the message. From then on, edits replace that selection. A
+selection made before the first request replaces the first one. In Normal
+mode, <leader>k only moves into the input.
 
 A characterwise or blockwise selection (|v| or |CTRL-V|) sends the lines it
 touches plus the selected characters. Only those characters are
@@ -45,12 +52,14 @@ To force one kind of reply, pass a mode: >lua
     require("leader-k").open({ mode = "edit" }) -- always propose an edit
     require("leader-k").open({ mode = "ask" })  -- always answer
 <
-In a buffer that is not 'modifiable', the default mode only answers.
+In a buffer that is not 'modifiable', the default mode only answers. A
+conversation keeps the mode it started with.
 
                                                             *:LeaderK*
 :[range]LeaderK [request]
     Start on the range (default: current line); the model decides how to
-    reply. A request skips the prompt.
+    reply. A request is sent at once. During a conversation, the range is
+    attached to the next message instead.
 
                                                         *:LeaderKEdit*
 :[range]LeaderKEdit [instruction]
@@ -109,19 +118,19 @@ KEYS                                                        *leader-k-keys*
   keys.accept  <CR>       Apply the proposal.
   keys.reject  <BS>       Discard the proposal or stop a request.
   keys.cancel  <C-c>      Stop a request. A refine returns to its proposal.
-  keys.refine  <leader>k  Follow up on a proposal or answer; empty input
-                          regenerates the last reply.
+  keys.refine  <leader>k  Move into the panel input to follow up on a
+                          proposal or answer.
 
 Outside their session, or off screen, the keys keep their usual meaning.
 
-In the prompt: Enter sends; Up/Down recall requests; <C-c> cancels.
-Esc enters Normal mode, where Esc or q cancels.
+In the panel transcript: q ends the conversation; keys.refine, i, or a
+moves into the input; keys.cancel stops a running request.
 
-In the panel transcript: q closes the answer; keys.refine, i, or a moves
-into the input; keys.cancel stops a running request. In the panel input:
-Enter sends, and Enter alone regenerates the last reply; Up/Down recall
-requests; keys.cancel stops a running request or returns to the code. In
-Normal mode, Esc returns to the code and q closes the answer.
+In the panel input: Enter sends, and Enter alone on a follow-up regenerates
+the last reply; Up/Down recall requests; keys.cancel stops a running
+request or returns to the code. Esc on an empty input cancels a new
+conversation, or else returns to the code; with text, it enters Normal
+mode, where Esc returns to the code and q ends the conversation.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*
@@ -132,7 +141,9 @@ logged. A literal key remains in your config file. Each request includes
 the selected lines, the selected characters of a characterwise selection,
 surrounding code (up to `context_bytes` on each side), file metadata,
 diagnostics on the selection, and the earlier requests and replies of the
-conversation.
+conversation. A selection attached to a follow-up adds its lines; one in a
+file the conversation has not used yet also adds that file's surrounding
+code and metadata.
 
 ==============================================================================
 HIGHLIGHTS                                             *leader-k-highlights*
@@ -141,22 +152,24 @@ HIGHLIGHTS                                             *leader-k-highlights*
   LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
   LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
   LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
-  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash  LeaderKFocus
+  LeaderKPlaceholder  LeaderKFlash  LeaderKFocus
 
-In the answer panel, your messages use the color of LeaderKUserBar for
-the bar on their left and LeaderKUser for their background. LeaderKUserBar links to Function. LeaderKUser blends the
-background of Normal with the color of LeaderKUserBar at 20%, or links to
-CursorLine when either color is missing. Notes such as "Proposed an edit."
-use LeaderKNote. The divider above the input uses LeaderKDivider, the color
-of NonText on the background of Normal.
+In the panel, your messages use the color of LeaderKUserBar for the bar on
+their left and LeaderKUser for their background. LeaderKUserBar links to
+Function. LeaderKUser blends the background of Normal with the color of
+LeaderKUserBar at 20%, or links to CursorLine when either color is missing.
+Notes such as "Proposed an edit." and attached selections use LeaderKNote.
+The divider above the input uses LeaderKDivider, the color of NonText on
+the background of Normal. A selection attached to the next message is
+highlighted with LeaderKSelection.
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*
 
-Edits replace whole lines. One session runs per buffer; sessions in other
-buffers can run in parallel. Request context comes from the current file.
-Tree-sitter syntax colors on proposed lines require a parser for the
-filetype. Answers use the bundled Markdown parser; colors in their code
-blocks require a parser for the block's language.
+Edits replace whole lines. One conversation runs at a time. Request
+context comes from the files of the attached selections. Tree-sitter
+syntax colors on proposed lines require a parser for the filetype. Answers
+use the bundled Markdown parser; colors in their code blocks require a
+parser for the block's language.
 
  vim:tw=78:ts=8:ft=help:norl:

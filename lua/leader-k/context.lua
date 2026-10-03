@@ -38,6 +38,7 @@ function M.build(buf, r0, r1, selection, focus)
     size = size + #after[last] + 1
   end
   return {
+    buf = buf,
     path = name ~= "" and vim.fn.fnamemodify(name, ":~:.") or "[unnamed buffer]",
     filetype = vim.bo[buf].filetype,
     line_count = vim.api.nvim_buf_line_count(buf),

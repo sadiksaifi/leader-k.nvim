@@ -44,6 +44,7 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 }
 
 ---@class leader_k.Context
+---@field buf integer
 ---@field path string
 ---@field filetype string
 ---@field line_count integer
@@ -62,6 +63,7 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 ---@field answer string|nil The Markdown answer, once the reply was an answer.
 ---@field selection string[]|nil The selected lines, when they changed since the model last saw them.
 ---@field applied boolean|nil The user accepted this turn's proposal.
+---@field attach leader_k.Context|nil The selection the user attached to this turn. Edits replace it from then on.
 
 -- How the user's text is introduced in each mode.
 local LABEL = { auto = "Request", edit = "Instruction", ask = "Question" }
@@ -69,31 +71,33 @@ local LABEL = { auto = "Request", edit = "Instruction", ask = "Question" }
 -- How a reply without tags is read in each mode.
 M.untagged = { auto = "answer", edit = "code", ask = "answer" }
 
+---Describes the selection: with `full`, as the first sight of its file,
+---with the code around it; otherwise only its lines.
 ---@param ctx leader_k.Context
----@param instruction string
----@param mode leader_k.Mode
-local function first_message(ctx, instruction, mode)
+---@param full boolean
+---@return string[]
+local function selection_block(ctx, full)
   local out = {}
-  local ft = ctx.filetype ~= "" and ctx.filetype or "plain text"
   local r0 = ctx.first_row
   local r1 = r0 + math.max(#ctx.selection, 1) - 1
-  out[#out + 1] = ("File: %s (%s), %d lines. The selection is %s."):format(
-    ctx.path,
-    ft,
-    ctx.line_count,
-    r0 == r1 and ("line %d"):format(r0) or ("lines %d-%d"):format(r0, r1)
-  )
-  if ctx.omitted_before > 0 or ctx.omitted_after > 0 then
-    out[#out + 1] = "The file is large, so only the part around the selection is shown."
-  end
-  out[#out + 1] = ""
-  if ctx.omitted_before > 0 then
-    out[#out + 1] = ("[lines 1-%d omitted]"):format(ctx.omitted_before)
-  end
-  if #ctx.before > 0 then
-    out[#out + 1] = "<before>"
-    vim.list_extend(out, ctx.before)
-    out[#out + 1] = "</before>"
+  local where = r0 == r1 and ("line %d"):format(r0) or ("lines %d-%d"):format(r0, r1)
+  if full then
+    local ft = ctx.filetype ~= "" and ctx.filetype or "plain text"
+    out[#out + 1] = ("File: %s (%s), %d lines. The selection is %s."):format(ctx.path, ft, ctx.line_count, where)
+    if ctx.omitted_before > 0 or ctx.omitted_after > 0 then
+      out[#out + 1] = "The file is large, so only the part around the selection is shown."
+    end
+    out[#out + 1] = ""
+    if ctx.omitted_before > 0 then
+      out[#out + 1] = ("[lines 1-%d omitted]"):format(ctx.omitted_before)
+    end
+    if #ctx.before > 0 then
+      out[#out + 1] = "<before>"
+      vim.list_extend(out, ctx.before)
+      out[#out + 1] = "</before>"
+    end
+  else
+    out[#out + 1] = ("The selection is %s of %s."):format(where, ctx.path)
   end
   out[#out + 1] = "<selection>"
   vim.list_extend(out, ctx.selection)
@@ -104,12 +108,12 @@ local function first_message(ctx, instruction, mode)
     out[#out + 1] = ctx.focus
     out[#out + 1] = "</highlight>"
   end
-  if #ctx.after > 0 then
+  if full and #ctx.after > 0 then
     out[#out + 1] = "<after>"
     vim.list_extend(out, ctx.after)
     out[#out + 1] = "</after>"
   end
-  if ctx.omitted_after > 0 then
+  if full and ctx.omitted_after > 0 then
     out[#out + 1] = ("[lines %d-%d omitted]"):format(ctx.line_count - ctx.omitted_after + 1, ctx.line_count)
   end
   if #ctx.diagnostics > 0 then
@@ -117,6 +121,14 @@ local function first_message(ctx, instruction, mode)
     out[#out + 1] = "Diagnostics in the selection:"
     vim.list_extend(out, ctx.diagnostics)
   end
+  return out
+end
+
+---@param ctx leader_k.Context
+---@param instruction string
+---@param mode leader_k.Mode
+local function first_message(ctx, instruction, mode)
+  local out = selection_block(ctx, true)
   out[#out + 1] = ""
   out[#out + 1] = LABEL[mode] .. ": " .. instruction
   return table.concat(out, "\n")
@@ -133,18 +145,22 @@ end
 ---@param turn leader_k.Turn
 ---@param prev leader_k.Turn
 ---@param mode leader_k.Mode
-local function follow_up(turn, prev, mode)
+---@param full boolean The turn's attachment is in a file the model has not seen.
+local function follow_up(turn, prev, mode, full)
+  local target = turn.attach and "the new selection" or "the same selection"
+  local fresh = turn.attach or prev.answer or prev.applied
   local ask
   if mode == "ask" then
-    ask = "Answer the follow-up about the same selection in <answer></answer> again."
-  elseif mode == "auto" and (prev.answer or prev.applied) then
-    ask =
-      "If this asks for a change, reply with the full new region for the same selection in <code></code>. Otherwise reply in <answer></answer>."
+    ask = ("Answer the follow-up about %s in <answer></answer>."):format(target)
+  elseif mode == "auto" and fresh then
+    ask = ("If this asks for a change, reply with the full new region for %s in <code></code>. Otherwise reply in <answer></answer>."):format(
+      target
+    )
   elseif mode == "auto" then
     ask =
       "If this asks for a change, revise your replacement and reply with the full new region in <code></code> again. Otherwise reply in <answer></answer>."
-  elseif prev.answer or prev.applied then
-    ask = "Reply with the full new region for the same selection in <code></code>."
+  elseif fresh then
+    ask = ("Reply with the full new region for %s in <code></code>."):format(target)
   else
     ask = "Revise your replacement for the same selection. Reply with the full new region in <code></code> again."
   end
@@ -152,7 +168,10 @@ local function follow_up(turn, prev, mode)
   if prev.applied then
     out[#out + 1] = "The user applied your proposal, so the selection now holds it."
   end
-  if turn.selection then
+  if turn.attach then
+    out[#out + 1] = "The user selected new code for this follow-up. Edits now replace this selection.\n"
+      .. table.concat(selection_block(turn.attach, full), "\n")
+  elseif turn.selection then
     out[#out + 1] = "The selection now reads:\n<selection>\n" .. table.concat(turn.selection, "\n") .. "\n</selection>"
   end
   out[#out + 1] = ask
@@ -160,18 +179,24 @@ local function follow_up(turn, prev, mode)
   return table.concat(out, "\n\n")
 end
 
----@param ctx leader_k.Context
----@param turns leader_k.Turn[] The last turn is the one being requested.
+---@param turns leader_k.Turn[] The last turn is the one being requested. The first has an attachment.
 ---@param mode leader_k.Mode
 ---@return { role: string, content: string }[]
-function M.messages(ctx, turns, mode)
+function M.messages(turns, mode)
+  local first = assert(turns[1].attach)
   local msgs = {
     { role = "system", content = M.system[mode] },
-    { role = "user", content = first_message(ctx, turns[1].instruction, mode) },
+    { role = "user", content = first_message(first, turns[1].instruction, mode) },
   }
+  local buf = first.buf
   for i = 2, #turns do
+    local a = turns[i].attach
+    local full = a ~= nil and a.buf ~= buf
+    if a then
+      buf = a.buf
+    end
     msgs[#msgs + 1] = { role = "assistant", content = reply_of(turns[i - 1]) }
-    msgs[#msgs + 1] = { role = "user", content = follow_up(turns[i], turns[i - 1], mode) }
+    msgs[#msgs + 1] = { role = "user", content = follow_up(turns[i], turns[i - 1], mode, full) }
   end
   return msgs
 end

@@ -1,11 +1,11 @@
--- One conversation about one selection: prompt, request, then a proposed
--- edit to review or an answer to read, and follow-ups. At most one session
--- exists per buffer.
+-- One conversation: a prompt, a request, then a proposed edit to review or
+-- an answer to read, and follow-ups. It starts on a selection, and each
+-- follow-up can attach a new one, in any buffer. Edits replace the latest
+-- selection. One conversation exists at a time.
 
 local answer = require("leader-k.answer")
 local config = require("leader-k.config")
 local context = require("leader-k.context")
-local input = require("leader-k.input")
 local prompt = require("leader-k.prompt")
 local provider = require("leader-k.provider")
 local render = require("leader-k.render")
@@ -14,15 +14,17 @@ local M = {}
 
 local mark_ns = vim.api.nvim_create_namespace("leader-k.region")
 local flash_ns = vim.api.nvim_create_namespace("leader-k.flash")
+local attach_ns = vim.api.nvim_create_namespace("leader-k.attach")
 local FRAME_MS = 80
 
----@type table<integer, leader_k.Session>
-local sessions = {}
+---@type leader_k.Session|nil
+local current
 
 -- How long a conversation can be resumed after its proposal is accepted.
 local RESUME_MS = 120000
 
 ---@class leader_k.Recent
+---@field buf integer
 ---@field mark integer Extmark over the accepted lines.
 ---@field turns leader_k.Turn[]
 ---@field ctx leader_k.Context
@@ -30,16 +32,15 @@ local RESUME_MS = 120000
 ---@field seen string[]
 ---@field expires integer
 
----The last accepted conversation per buffer.
----@type table<integer, leader_k.Recent>
-local recent = {}
+---The last accepted conversation.
+---@type leader_k.Recent|nil
+local recent
 
----@param buf integer
-local function forget(buf)
-  local r = recent[buf]
-  recent[buf] = nil
-  if r and vim.api.nvim_buf_is_valid(buf) then
-    pcall(vim.api.nvim_buf_del_extmark, buf, mark_ns, r.mark)
+local function forget()
+  local r = recent
+  recent = nil
+  if r and vim.api.nvim_buf_is_valid(r.buf) then
+    pcall(vim.api.nvim_buf_del_extmark, r.buf, mark_ns, r.mark)
   end
 end
 
@@ -51,13 +52,13 @@ end
 ---@param mode leader_k.Mode
 ---@return leader_k.Recent|nil, integer|nil, integer|nil
 local function resumable(buf, r0, r1, mode)
-  local r = recent[buf]
-  if not r then
+  local r = recent
+  if not r or r.buf ~= buf then
     return nil
   end
   local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, r.mark, { details = true })
   if not m[1] or vim.uv.now() > r.expires then
-    forget(buf)
+    forget()
     return nil
   end
   local q0, q1 = m[1], math.max(m[1], m[3].end_row or m[1])
@@ -69,11 +70,14 @@ local function resumable(buf, r0, r1, mode)
   return r, q0, q1
 end
 
----@class leader_k.Session
+---A selection: rows of a buffer, and its characters when characterwise.
+---@class leader_k.Target
 ---@field buf integer
----@field win integer
+---@field win integer The window it was selected in.
 ---@field mark integer
 ---@field focus_marks integer[]|nil Highlighted characters of a characterwise selection, one mark per line.
+
+---@class leader_k.Session: leader_k.Target The selection edits replace.
 ---@field mark_ns integer
 ---@field original string[] The selected lines a proposal replaces.
 ---@field seen string[] The selected lines as the model last saw them.
@@ -100,6 +104,8 @@ end
 ---@field input_buf integer|nil
 ---@field error string|nil The last failure, kept for callers and tests.
 ---@field prev table|nil The review a refine started from, restored if it fails.
+---@field pending leader_k.Target|nil A selection attached to the next follow-up.
+---@field pending_drawn integer|nil Buffer that holds the highlight of `pending`.
 ---@field stale boolean
 ---@field cancel fun()|nil
 ---@field timer uv.uv_timer_t|nil
@@ -108,7 +114,6 @@ end
 ---@field augroup integer
 ---@field busy boolean
 ---@field resumed boolean Continues a conversation whose proposal was accepted.
----@field reserve integer Blank rows kept above the selection for the prompt float.
 ---@field reveal boolean Scroll the header into view on the next draw.
 ---@field spans_for string[]|nil Proposal the cached syntax spans belong to.
 ---@field spans table|nil
@@ -150,12 +155,13 @@ function Session:region_lines()
   return vim.api.nvim_buf_get_lines(self.buf, r0, r1 + 1, false)
 end
 
+---@param buf integer
 ---@param r0 integer
 ---@param r1 integer
-function Session:set_region(r0, r1)
-  local last = vim.api.nvim_buf_get_lines(self.buf, r1, r1 + 1, false)[1] or ""
-  self.mark = vim.api.nvim_buf_set_extmark(self.buf, mark_ns, r0, 0, {
-    id = self.mark,
+---@return integer mark Extmark over rows r0..r1 that grows with edits inside them.
+local function region_mark(buf, r0, r1)
+  local last = vim.api.nvim_buf_get_lines(buf, r1, r1 + 1, false)[1] or ""
+  return vim.api.nvim_buf_set_extmark(buf, mark_ns, r0, 0, {
     end_row = r1,
     end_col = #last,
     right_gravity = true,
@@ -163,13 +169,189 @@ function Session:set_region(r0, r1)
   })
 end
 
----@param rows integer
-function Session:set_reserve(rows)
-  if rows == self.reserve then
+---@param buf integer
+---@param mark integer
+---@return integer r0, integer r1 0-based rows, inclusive; r1 < r0 once the mark is gone.
+local function region_of(buf, mark)
+  local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, mark, { details = true })
+  if not m[1] then
+    return 0, -1
+  end
+  return m[1], math.max(m[1], m[3].end_row or m[1])
+end
+
+---@param buf integer
+---@param marks integer[]|nil
+---@return { [1]: integer, [2]: integer, [3]: integer, [4]: integer }[] ranges row, col, end row, end col
+local function ranges_of(buf, marks)
+  local out = {}
+  for _, id in ipairs(marks or {}) do
+    local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, id, { details = true })
+    if m[1] then
+      out[#out + 1] = { m[1], m[2], m[3].end_row or m[1], m[3].end_col or m[2] }
+    end
+  end
+  return out
+end
+
+---@param buf integer
+---@param marks integer[]|nil
+---@return string|nil
+local function text_of(buf, marks)
+  if not marks then
+    return nil
+  end
+  local parts = {}
+  for _, r in ipairs(ranges_of(buf, marks)) do
+    vim.list_extend(parts, vim.api.nvim_buf_get_text(buf, r[1], r[2], r[3], r[4], {}))
+  end
+  return table.concat(parts, "\n")
+end
+
+---Builds a target for rows r0..r1 of `buf`.
+---@param win integer
+---@param buf integer
+---@param r0 integer
+---@param r1 integer
+---@param focus integer[][]|nil { row, start col, end col (exclusive) } per line, 0-based.
+---@return leader_k.Target
+local function new_target(win, buf, r0, r1, focus)
+  local t = { buf = buf, win = win, mark = region_mark(buf, r0, r1) }
+  if focus then
+    t.focus_marks = {}
+    for _, f in ipairs(focus) do
+      local row = f[1]
+      local len = #(vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or "")
+      local c0 = math.min(f[2], len)
+      local c1 = math.max(c0, math.min(f[3], len))
+      table.insert(
+        t.focus_marks,
+        vim.api.nvim_buf_set_extmark(buf, mark_ns, row, c0, { end_row = row, end_col = c1, end_right_gravity = true })
+      )
+    end
+    -- Whole lines selected characterwise are a linewise selection.
+    local lines = vim.api.nvim_buf_get_lines(buf, r0, r1 + 1, false)
+    if text_of(buf, t.focus_marks) == table.concat(lines, "\n") then
+      for _, id in ipairs(t.focus_marks) do
+        pcall(vim.api.nvim_buf_del_extmark, buf, mark_ns, id)
+      end
+      t.focus_marks = nil
+    end
+  end
+  return t
+end
+
+---@param t leader_k.Target|nil
+local function free_target(t)
+  if not (t and vim.api.nvim_buf_is_valid(t.buf)) then
     return
   end
-  self.reserve = rows
-  self.reveal = rows > 0
+  pcall(vim.api.nvim_buf_del_extmark, t.buf, mark_ns, t.mark)
+  for _, id in ipairs(t.focus_marks or {}) do
+    pcall(vim.api.nvim_buf_del_extmark, t.buf, mark_ns, id)
+  end
+end
+
+---@param t leader_k.Target
+---@return string label such as "lines 3-9 of sample.lua".
+local function describe(t)
+  local r0, r1 = region_of(t.buf, t.mark)
+  local name = vim.api.nvim_buf_get_name(t.buf)
+  return answer.label(name ~= "" and name or "[unnamed buffer]", r0, r1, t.focus_marks ~= nil)
+end
+
+---@return leader_k.Target
+function Session:target()
+  return { buf = self.buf, win = self.win, mark = self.mark, focus_marks = self.focus_marks }
+end
+
+---Makes `t` the selection edits replace.
+---@param t leader_k.Target
+function Session:set_target(t)
+  if self.buf and t.buf ~= self.buf then
+    self:restore_maps()
+    render.clear(self.buf)
+  end
+  self.buf, self.win, self.mark, self.focus_marks = t.buf, t.win, t.mark, t.focus_marks
+  self.filetype = vim.bo[t.buf].filetype
+  self.original = self:region_lines()
+  local first = self.original[1] or ""
+  for _, l in ipairs(self.original) do
+    if l:find("%S") then
+      first = l
+      break
+    end
+  end
+  self.indent_width = vim.fn.strdisplaywidth(first:match("^%s*"))
+end
+
+---What the input shows as attached to the next message, if anything.
+---@return string|nil
+function Session:attachment()
+  if self.pending then
+    return describe(self.pending)
+  end
+  if self.state == "prompt" and #self.turns == 0 then
+    return describe(self:target())
+  end
+end
+
+-- Highlights the selection attached to the next follow-up.
+function Session:draw_pending()
+  if self.pending_drawn and vim.api.nvim_buf_is_valid(self.pending_drawn) then
+    vim.api.nvim_buf_clear_namespace(self.pending_drawn, attach_ns, 0, -1)
+  end
+  self.pending_drawn = nil
+  local a = self.pending
+  if not (a and vim.api.nvim_buf_is_valid(a.buf)) then
+    return
+  end
+  self.pending_drawn = a.buf
+  local ranges = ranges_of(a.buf, a.focus_marks)
+  for _, f in ipairs(ranges) do
+    vim.api.nvim_buf_set_extmark(a.buf, attach_ns, f[1], f[2], {
+      end_row = f[3],
+      end_col = f[4],
+      hl_group = "LeaderKSelection",
+      priority = 150,
+      strict = false,
+    })
+  end
+  if #ranges == 0 then
+    local r0, r1 = region_of(a.buf, a.mark)
+    for row = r0, r1 do
+      vim.api.nvim_buf_set_extmark(a.buf, attach_ns, row, 0, {
+        line_hl_group = "LeaderKSelection",
+        priority = 150,
+        strict = false,
+      })
+    end
+  end
+end
+
+function Session:drop_pending()
+  free_target(self.pending)
+  self.pending = nil
+  self:draw_pending()
+end
+
+---Attaches rows r0..r1 of `buf` to the next message. Before the first
+---request, it replaces the selection instead.
+---@param win integer
+---@param buf integer
+---@param r0 integer
+---@param r1 integer
+---@param focus integer[][]|nil See new_target().
+function Session:attach(win, buf, r0, r1, focus)
+  local t = new_target(win, buf, r0, r1, focus)
+  if self.state == "prompt" and #self.turns == 0 then
+    local old = self:target()
+    self:set_target(t)
+    free_target(old)
+  else
+    self:drop_pending()
+    self.pending = t
+  end
   self:draw()
 end
 
@@ -177,6 +359,7 @@ function Session:draw()
   -- The panel first: whether it is open decides what the code shows.
   answer.sync(self)
   render.draw(self)
+  self:draw_pending()
 end
 
 ---Wraps code in a Markdown fence for the answer view.
@@ -253,18 +436,19 @@ end
 
 function Session:destroy()
   self.state = "closed"
-  if sessions[self.buf] == self then
-    sessions[self.buf] = nil
+  if current == self then
+    current = nil
   end
   self:end_request()
   self:stop_timer()
   self:set_busy(false)
   pcall(vim.api.nvim_del_augroup_by_id, self.augroup)
   answer.close(self)
+  self:drop_pending()
+  self:drop_prev()
   if vim.api.nvim_buf_is_valid(self.buf) then
     render.clear(self.buf)
-    pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, self.mark)
-    self:clear_focus()
+    free_target(self:target())
     self:restore_maps()
   end
 end
@@ -424,60 +608,14 @@ function Session:check_stale()
   end
 end
 
----@param focus integer[][] { row, start col, end col (exclusive) } per line, 0-based.
-function Session:set_focus(focus)
-  self.focus_marks = {}
-  for _, f in ipairs(focus) do
-    local row = f[1]
-    local len = #(vim.api.nvim_buf_get_lines(self.buf, row, row + 1, false)[1] or "")
-    local c0 = math.min(f[2], len)
-    local c1 = math.max(c0, math.min(f[3], len))
-    table.insert(
-      self.focus_marks,
-      vim.api.nvim_buf_set_extmark(
-        self.buf,
-        mark_ns,
-        row,
-        c0,
-        { end_row = row, end_col = c1, end_right_gravity = true }
-      )
-    )
-  end
-  -- Whole lines selected characterwise are a linewise selection.
-  if self:focus_text() == table.concat(self.original, "\n") then
-    self:clear_focus()
-  end
-end
-
-function Session:clear_focus()
-  for _, id in ipairs(self.focus_marks or {}) do
-    pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, id)
-  end
-  self.focus_marks = nil
-end
-
 ---@return { [1]: integer, [2]: integer, [3]: integer, [4]: integer }[] ranges row, col, end row, end col
 function Session:focus_ranges()
-  local out = {}
-  for _, id in ipairs(self.focus_marks or {}) do
-    local m = vim.api.nvim_buf_get_extmark_by_id(self.buf, mark_ns, id, { details = true })
-    if m[1] then
-      out[#out + 1] = { m[1], m[2], m[3].end_row or m[1], m[3].end_col or m[2] }
-    end
-  end
-  return out
+  return ranges_of(self.buf, self.focus_marks)
 end
 
 ---@return string|nil
 function Session:focus_text()
-  if not self.focus_marks then
-    return nil
-  end
-  local parts = {}
-  for _, r in ipairs(self:focus_ranges()) do
-    vim.list_extend(parts, vim.api.nvim_buf_get_text(self.buf, r[1], r[2], r[3], r[4], {}))
-  end
-  return table.concat(parts, "\n")
+  return text_of(self.buf, self.focus_marks)
 end
 
 function Session:build_context()
@@ -500,6 +638,19 @@ function Session:save_review()
   }
 end
 
+---Forgets the review a refine started from, once the refine succeeds.
+function Session:drop_prev()
+  local p = self.prev
+  self.prev = nil
+  if p and p.target then
+    -- The refine moved to an attached selection.
+    free_target(p.target)
+    if p.target.buf ~= self.buf and vim.api.nvim_buf_is_valid(p.target.buf) then
+      render.clear(p.target.buf)
+    end
+  end
+end
+
 ---Returns to the review a refine started from. False if there is none.
 function Session:restore_review()
   local p = self.prev
@@ -510,6 +661,17 @@ function Session:restore_review()
   self.cancel = nil
   self:stop_timer()
   self:set_busy(false)
+  if p.target then
+    -- Back to the earlier selection; the new one waits for the next try.
+    if self.pending then
+      free_target(self:target())
+    else
+      self.pending = self:target()
+    end
+    self:set_target(p.target)
+    self.ctx = p.ctx
+    self:install_maps()
+  end
   self.turns, self.instruction = p.turns, p.instruction
   self.original, self.seen = p.original, p.seen
   self.proposal, self.hunks, self.added, self.removed = p.proposal, p.hunks, p.added, p.removed
@@ -553,7 +715,7 @@ function Session:send()
   self.added, self.removed = 0, 0
   self.instruction = self.turns[#self.turns].instruction
 
-  local messages = prompt.messages(self.ctx, self.turns, self.mode)
+  local messages = prompt.messages(self.turns, self.mode)
   local cancel, start_err = provider.stream(ep, messages, {
     on_reasoning = function()
       if self.phase == "waiting" then
@@ -578,7 +740,6 @@ function Session:send()
     return
   end
   self.cancel = cancel
-  self.reveal = true
   self:set_busy(true)
   self:start_timer()
   self:draw()
@@ -610,7 +771,7 @@ function Session:finish(finish_reason)
   local turn = self.turns[#self.turns]
   if self.resumed then
     self.resumed = false
-    forget(self.buf)
+    forget()
   end
   if ex.kind == "answer" or self.mode == "ask" then
     local text = ex.kind == "answer" and ex.text or self:fence(ex.text)
@@ -622,7 +783,8 @@ function Session:finish(finish_reason)
       text = text .. "\n\n*The reply hit the model's output limit before it finished.*"
     end
     turn.answer, turn.proposal = text, nil
-    self.prev, self.answer_text = nil, nil
+    self:drop_prev()
+    self.answer_text = nil
     self.state, self.phase = "answered", nil
     self:draw()
     self:notify_ready("answer")
@@ -639,9 +801,10 @@ function Session:finish(finish_reason)
     self.added = self.added + h[4]
   end
   turn.proposal, turn.answer = self.proposal, nil
-  self.prev = nil
+  self:drop_prev()
   self.state, self.phase = "review", nil
   self.stale = not same_lines(self:region_lines(), self.original)
+  self.reveal = true
   self:draw()
   -- A proposal is reviewed in the code.
   if answer.focused(self) then
@@ -656,10 +819,11 @@ end
 ---@param r1 integer
 ---@param lines string[]
 function Session:remember(r0, r1, lines)
-  forget(self.buf)
+  forget()
   local turns = vim.deepcopy(self.turns)
   turns[#turns].applied = true
-  recent[self.buf] = {
+  recent = {
+    buf = self.buf,
     mark = vim.api.nvim_buf_set_extmark(self.buf, mark_ns, r0, 0, {
       end_row = r1,
       end_col = #lines[#lines],
@@ -689,6 +853,10 @@ function Session:accept()
     }, false, {})
     return
   end
+  if not vim.bo[self.buf].modifiable then
+    vim.api.nvim_echo({ { "leader-k: this buffer is not modifiable", "WarningMsg" } }, false, {})
+    return
+  end
   local r0, r1 = render.region(self)
   local lines = self.proposal or {}
   local buf = self.buf
@@ -716,27 +884,39 @@ function Session:accept()
   end
 end
 
----Sends a follow-up to the proposal or answer on screen. Empty text
----regenerates the last reply.
+---Sends a follow-up to the conversation, with the attached selection if
+---there is one. Empty text regenerates the last reply.
 ---@param text string
 ---@return boolean sent
 function Session:follow_up(text)
-  if sessions[self.buf] ~= self or (self.state ~= "review" and self.state ~= "answered") then
+  local state = self.state
+  if current ~= self or #self.turns == 0 or (state ~= "review" and state ~= "answered" and state ~= "prompt") then
+    return false
+  end
+  -- Regenerating needs a reply to replace and keeps its selection.
+  if text == "" and (state == "prompt" or self.pending) then
     return false
   end
   local last = self.turns[#self.turns]
-  local answered = self.state == "answered"
   self:save_review()
-  if answered then
-    -- The code may have changed while the answer was read. An edit
-    -- replaces what is there now.
+  if state ~= "review" then
+    -- The code may have changed since the last request. An edit replaces
+    -- what is there now.
     self.original, self.stale = self:region_lines(), false
   end
   if text == "" then
     last.proposal, last.answer = nil, nil -- Regenerate the same turn.
   else
     local turn = { instruction = text }
-    if not same_lines(self.original, self.seen) then
+    if self.pending then
+      self.prev.target, self.prev.ctx = self:target(), self.ctx
+      local t = self.pending
+      self.pending = nil
+      self:set_target(t)
+      self.seen, self.stale = self.original, false
+      self:build_context()
+      turn.attach = self.ctx
+    elseif not same_lines(self.original, self.seen) then
       self.seen, turn.selection = self.original, self.original
     end
     table.insert(self.turns, turn)
@@ -745,61 +925,59 @@ function Session:follow_up(text)
   return true
 end
 
----Asks for a follow-up to the proposal or answer on screen: in the answer
----panel when it is open, else in a prompt at the selection.
-function Session:refine()
-  if self.state ~= "review" and self.state ~= "answered" then
-    return
+---Sends the text typed in the panel input: the first request, or a
+---follow-up.
+---@param text string
+---@return boolean sent
+function Session:submit(text)
+  if self.state ~= "prompt" or #self.turns > 0 then
+    return self:follow_up(text)
   end
-  if answer.docked(self) then
-    answer.focus_input(self)
-    return
+  if text == "" then
+    return false
   end
-  local r0, r1 = render.region(self)
-  local win = vim.api.nvim_get_current_win()
-  if vim.api.nvim_win_get_buf(win) ~= self.buf then
-    win = vim.api.nvim_win_is_valid(self.win) and vim.api.nvim_win_get_buf(self.win) == self.buf and self.win
-      or vim.fn.win_findbuf(self.buf)[1]
-  end
-  if not win then
-    return
-  end
-  local answered = self.state == "answered"
-  input.open({
-    win = win,
-    r0 = r0,
-    r1 = r1,
-    title = answered and " Follow up " or " Refine ",
-    footer = " " .. model_label(config.options.model or "") .. " ",
-    placeholder = (answered and "Ask a follow-up." or "What should change?") .. " Enter alone regenerates",
-    allow_empty = true,
-    on_layout = function(rows)
-      self:set_reserve(rows)
-    end,
-    on_submit = function(text)
-      self:follow_up(text)
-    end,
-    on_cancel = function() end,
-  })
+  -- Read the selection again in case it changed while typing.
+  self.original = self:region_lines()
+  self.seen = self.original
+  self:build_context()
+  self.turns = { { instruction = text, attach = self.ctx } }
+  self:send()
+  return true
 end
 
----Starts a session for rows r0..r1 (0-based, inclusive) of the current window.
----Opens the prompt, or sends `instruction` directly when given.
+---Moves focus into the panel input.
+function Session:refine()
+  answer.focus_input(self)
+end
+
+---Starts a conversation on rows r0..r1 (0-based, inclusive) of the current
+---window and opens the panel with its input focused, or sends
+---`instruction` directly when given. During a conversation, attaches
+---`opts.selection` rows to the next message, or only focuses the input.
 ---@param r0 integer
 ---@param r1 integer
 ---@param instruction string|nil
----@param opts { mode: leader_k.Mode|nil, focus: integer[][]|nil }|nil See Session:set_focus().
+---@param opts { mode: leader_k.Mode|nil, focus: integer[][]|nil, selection: boolean|nil }|nil `focus`: see new_target(). `selection`: the rows were selected, not just the cursor line.
 function M.start(r0, r1, instruction, opts)
-  local mode = (opts or {}).mode or "auto"
+  opts = opts or {}
+  local mode = opts.mode or "auto"
   local win = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_win_get_buf(win)
-  local existing = sessions[buf]
-  if existing then
-    if existing.state == "review" or existing.state == "answered" then
-      existing:refine()
-    elseif existing.state == "running" then
+  instruction = vim.trim(instruction or "")
+  local s = current
+  if s then
+    if opts.selection then
+      if s.mode == "edit" and not vim.bo[buf].modifiable then
+        vim.api.nvim_echo({ { "leader-k: this buffer is not modifiable", "WarningMsg" } }, false, {})
+        return
+      end
+      s:attach(win, buf, r0, r1, opts.focus)
+    end
+    if instruction == "" then
+      answer.focus_input(s)
+    elseif not s:submit(instruction) then
       vim.api.nvim_echo({
-        { "leader-k: a request is already running in this buffer. " },
+        { "leader-k: a request is already running. " },
         { render.key_label(config.options.keys.cancel), "Special" },
         { " stops it." },
       }, false, {})
@@ -821,7 +999,7 @@ function M.start(r0, r1, instruction, opts)
     return
   end
   local resume
-  if not (opts and opts.focus) then
+  if not opts.focus then
     local q0, q1
     resume, q0, q1 = resumable(buf, r0, r1, mode)
     if resume then
@@ -830,8 +1008,6 @@ function M.start(r0, r1, instruction, opts)
   end
 
   local self = setmetatable({
-    buf = buf,
-    win = win,
     mode = mode,
     mark_ns = mark_ns,
     state = "prompt",
@@ -842,121 +1018,76 @@ function M.start(r0, r1, instruction, opts)
     stale = false,
     dirty = false,
     busy = false,
-    reserve = 0,
     reveal = false,
     resumed = resume ~= nil,
-    filetype = vim.bo[buf].filetype,
+    model_label = model_label(config.options.model or ""),
   }, Session)
-  self:set_region(r0, r1)
-  self.original = vim.api.nvim_buf_get_lines(buf, r0, r1 + 1, false)
-  if opts and opts.focus then
-    self:set_focus(opts.focus)
+  self:set_target(new_target(win, buf, r0, r1, opts.focus))
+  if resume then
+    self.ctx, self.turns, self.seen = resume.ctx, vim.deepcopy(resume.turns), resume.seen
   end
-  local first = self.original[1] or ""
-  for _, l in ipairs(self.original) do
-    if l:find("%S") then
-      first = l
-      break
-    end
-  end
-  self.indent_width = vim.fn.strdisplaywidth(first:match("^%s*"))
-  sessions[buf] = self
+  current = self
 
-  self.augroup = vim.api.nvim_create_augroup("leader-k.session." .. buf, { clear = true })
+  self.augroup = vim.api.nvim_create_augroup("leader-k.session", { clear = true })
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, {
     group = self.augroup,
-    buffer = buf,
-    callback = function()
-      self:check_stale()
+    callback = function(ev)
+      if ev.buf == self.buf then
+        self:check_stale()
+      end
+      if self.pending and ev.buf == self.pending.buf then
+        self:draw_pending()
+      end
     end,
   })
   vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
     group = self.augroup,
-    buffer = buf,
-    callback = function()
-      self:destroy()
+    callback = function(ev)
+      if ev.buf == self.buf then
+        self:destroy()
+      elseif self.pending and ev.buf == self.pending.buf then
+        self:drop_pending()
+        self:draw()
+      elseif self.prev and self.prev.target and ev.buf == self.prev.target.buf then
+        -- A failed refine can no longer return there.
+        self.prev = nil
+      end
     end,
   })
   vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
     group = self.augroup,
     callback = function()
-      if self.state ~= "prompt" then
-        self:draw()
-      end
+      self:draw()
     end,
   })
 
-  local function submit(text)
-    if sessions[buf] ~= self then
-      return
-    end
-    -- Read the selection again in case it changed while typing.
-    local r0_, r1_ = render.region(self)
-    self.original = vim.api.nvim_buf_get_lines(buf, r0_, r1_ + 1, false)
-    if resume then
-      local turn = { instruction = text }
-      self.ctx, self.turns, self.seen = resume.ctx, vim.deepcopy(resume.turns), resume.seen
-      if not same_lines(self.original, self.seen) then
-        self.seen, turn.selection = self.original, self.original
-      end
-      table.insert(self.turns, turn)
-    else
-      self.seen = self.original
-      self:build_context()
-      self.turns = { { instruction = text } }
-    end
-    self:send()
-  end
-
-  if instruction and vim.trim(instruction) ~= "" then
-    submit(vim.trim(instruction))
+  if instruction ~= "" then
+    self:submit(instruction)
     return
   end
-
-  -- Put the cursor on the selection's first line so the view keeps the
-  -- prompt, which sits above that line, on screen.
-  vim.api.nvim_win_set_cursor(win, { r0 + 1, 0 })
-  vim.cmd.normal({ "^", bang = true })
-  self.reserve = 0
-  local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
-  local title, placeholder
-  if resume then
-    title = "Follow up"
-    placeholder = ({ auto = "Ask, or describe a change.", edit = "What should change?", ask = "Ask a follow-up." })[mode]
-  elseif mode == "ask" then
-    title, placeholder = "Ask about " .. where, "Ask a question."
-  elseif mode == "auto" then
-    title, placeholder = where:gsub("^%l", string.upper), "Ask, or describe a change."
-  else
-    title, placeholder = "Edit " .. where, "Describe the change."
-  end
-  input.open({
-    win = win,
-    r0 = r0,
-    r1 = r1,
-    title = " " .. title .. " ",
-    footer = " " .. model_label(config.options.model or "no model set") .. " ",
-    placeholder = placeholder .. " Enter sends, Esc cancels",
-    on_layout = function(rows)
-      self:set_reserve(rows)
-    end,
-    on_submit = submit,
-    on_cancel = function()
-      self:destroy()
-    end,
-  })
+  self:draw()
+  answer.focus_input(self)
 end
 
+---The conversation when its edits target `buf`.
 ---@param buf integer
 ---@return leader_k.Session|nil
 function M.get(buf)
-  return sessions[buf == 0 and vim.api.nvim_get_current_buf() or buf]
+  buf = buf == 0 and vim.api.nvim_get_current_buf() or buf
+  if current and current.buf == buf then
+    return current
+  end
 end
 
----Stops every running request. Used on exit.
+---@return leader_k.Session|nil
+function M.current()
+  return current
+end
+
+---Stops the conversation. Used on exit.
 function M.stop_all()
-  for _, s in pairs(sessions) do
-    s:destroy()
+  if current then
+    current:destroy()
   end
 end
 

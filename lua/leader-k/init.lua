@@ -24,9 +24,9 @@ end
 ---@class leader_k.OpenOpts
 ---@field mode? leader_k.Mode "auto" (default) lets the model edit or answer; "edit" or "ask" forces one.
 
----Starts a session on the visual selection, or the current line in Normal
----mode. When the buffer already has a proposal or an answer, asks for a
----follow-up instead.
+---Starts a conversation on the visual selection, or the current line in
+---Normal mode. During a conversation, attaches the visual selection to the
+---next message, or in Normal mode moves into the panel input.
 ---@param opts leader_k.OpenOpts|nil
 function M.open(opts)
   if not did_setup then
@@ -34,7 +34,8 @@ function M.open(opts)
   end
   local mode = vim.fn.mode()
   local r0, r1, focus
-  if mode == "v" or mode == "V" or mode == "\22" then
+  local visual = mode == "v" or mode == "V" or mode == "\22"
+  if visual then
     local a, b = vim.fn.line("v"), vim.fn.line(".")
     r0, r1 = math.min(a, b) - 1, math.max(a, b) - 1
     if mode ~= "V" then
@@ -51,11 +52,17 @@ function M.open(opts)
     local row = vim.api.nvim_win_get_cursor(0)[1] - 1
     r0, r1 = row, row
   end
-  require("leader-k.session").start(r0, r1, nil, vim.tbl_extend("force", opts or {}, { focus = focus }))
+  require("leader-k.session").start(
+    r0,
+    r1,
+    nil,
+    vim.tbl_extend("force", opts or {}, { focus = focus, selection = visual })
+  )
 end
 
----Starts a session on lines l1..l2 (1-based), sending `instruction` right
----away when it is not empty. Backs the commands.
+---Starts a conversation on lines l1..l2 (1-based), or attaches them to the
+---next message of the current one. Sends `instruction` right away when it
+---is not empty. Backs the commands.
 ---@param l1 integer
 ---@param l2 integer
 ---@param instruction string|nil
@@ -64,7 +71,12 @@ function M.run(l1, l2, instruction, opts)
   if not did_setup then
     M.setup()
   end
-  require("leader-k.session").start(l1 - 1, l2 - 1, instruction, opts)
+  require("leader-k.session").start(
+    l1 - 1,
+    l2 - 1,
+    instruction,
+    vim.tbl_extend("force", opts or {}, { selection = true })
+  )
 end
 
 return M

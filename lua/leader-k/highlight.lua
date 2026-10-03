@@ -63,11 +63,10 @@ function M.setup()
   set("LeaderKCountDelete", { link = "Removed" })
   set("LeaderKWarn", { link = "DiagnosticWarn" })
   set("LeaderKPlaceholder", { link = "NonText" })
-  set("LeaderKFooter", { link = "NonText" })
   set("LeaderKFlash", { link = "LeaderKAdd" })
   set("LeaderKNote", { link = "Comment" })
 
-  -- The user's messages in the answer panel: an accent bar over a faint tint
+  -- The user's messages in the panel: an accent bar over a faint tint
   -- of the same hue, so they read as a group apart from the answers, which
   -- keep the plain background and full contrast.
   set("LeaderKUserBar", { link = "Function" })

@@ -84,22 +84,26 @@ opts = {
 
 ## Use
 
-Select code, or put the cursor on a line, press `<leader>k`, and type a
+Select code, or put the cursor on a line, and press `<leader>k`. A panel
+opens on the right with the selection attached and an input for your
 request. The model decides how to reply:
 
 - A change, such as "use ipairs", comes back as a proposed edit shown inline
   as a diff. Nothing changes until you accept it.
 - A question, such as "why multiply here?", comes back as a Markdown answer in
-  a panel on the right. The buffer is never changed.
+  the panel. The buffer is never changed.
 
-Once there is an answer, the panel holds the conversation: the transcript,
-the status, and an input for follow-ups. The code keeps the selection
-marked and shows a diff when a follow-up proposes an edit, which you review
-in the code.
+The panel holds the conversation: the transcript, the status, and the
+input. Follow-ups continue it and can switch between the two: ask "why is
+this slow?", then "fix it". A proposed edit is reviewed in the code.
+Accepting or rejecting it, or pressing `q` in the panel, ends the
+conversation. Asking again on lines you just accepted, within two minutes,
+continues it.
 
-Follow-ups continue the same conversation and can switch between the two:
-ask "why is this slow?", then "fix it". Asking again on lines you just
-accepted, within two minutes, continues that conversation too.
+To bring other code into the conversation, select it in any buffer and
+press `<leader>k`. The input shows it as attached, for example
+"Attached: lines 3-9 of sample.lua", and it goes with your next message.
+From then on, edits replace that selection.
 
 A characterwise or blockwise selection sends the exact characters along with
 the lines they are on, so you can ask about a single expression.
@@ -107,14 +111,13 @@ the lines they are on, so you can ask about a single expression.
 | Context | Key | Action |
 | --- | --- | --- |
 | Normal / Visual | `<leader>k` | Start on the current line / selection |
-| Prompt | `<CR>` | Send request |
-| Prompt | `<Up>` / `<Down>` | Recall requests |
-| Prompt | `<C-c>` | Cancel |
+| Conversation, Visual | `<leader>k` | Attach the selection to the next message |
+| Conversation, Normal | `<leader>k` | Move into the panel input |
+| Panel input | `<CR>` / `<Up>` / `<Down>` | Send / recall requests |
+| Panel input | `<Esc>` | Back to the code; on an empty new request, cancel |
+| Panel | `q` | End the conversation |
 | Review | `<CR>` | Accept proposal |
 | Review / answer / request | `<BS>` | Reject proposal / close answer / stop request |
-| Review / answer | `<leader>k` | Follow up (in the panel when it is open) |
-| Panel | `q` | Close the answer |
-| Panel input | `<CR>` / `<Up>` / `<Esc>` | Send / recall / back to the code |
 | Request | `<C-c>` | Stop request |
 
 To always get one kind of reply, map the mode explicitly:
@@ -125,5 +128,6 @@ To always get one kind of reply, map the mode explicitly:
 ```
 
 `:LeaderK` (model decides), `:LeaderKEdit`, and `:LeaderKAsk` accept a range
-and an optional request. See `:help leader-k` for more keys. Run
-`:checkhealth leader-k` to inspect your setup.
+and an optional request. During a conversation, they attach the range. See
+`:help leader-k` for more keys. Run `:checkhealth leader-k` to inspect your
+setup.
