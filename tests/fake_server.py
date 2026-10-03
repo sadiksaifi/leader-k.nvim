@@ -74,6 +74,10 @@ class H(BaseHTTPRequestHandler):
                 send(b"data: [DONE]\n\n"); return
             if model in ('answer', 'answer_slow'):
                 stream(send, ANSWER, 0.05 if model == 'answer_slow' else 0.0); return
+            if model == 'route':
+                # Edits when asked for a change, answers otherwise.
+                last = body['messages'][-1]['content'].split('\n')[-1]
+                stream(send, SLOW if 'change' in last else ANSWER); return
             if model == 'untagged':
                 send(chunk(content="This adds up price times quantity.")); send(chunk(content="", finish="stop")); send(b"data: [DONE]\n\n"); return
             if model == 'answer_length':

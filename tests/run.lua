@@ -708,6 +708,66 @@ test("a characterwise selection sends its exact text and highlights only it", fu
   truthy(user:find("<highlight>\n" .. word .. "\n</highlight>", 1, true), user)
 end)
 
+local function follow_up(s, text)
+  s:refine()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { text })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+end
+
+test("follow-ups keep one conversation across answers and edits", function()
+  use("route")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+
+  follow_up(s, "explain more")
+  wait_state(s, "answered")
+  local text = assert(answer_text(s))
+  truthy(text:find("› why?", 1, true) and text:find("› explain more", 1, true), text)
+  local msgs = last_request().body.messages
+  eq(#msgs, 4)
+  truthy(msgs[3].content:find("<answer>\nIt multiplies", 1, true), msgs[3].content)
+  truthy(msgs[4].content:find("Request: explain more", 1, true), msgs[4].content)
+
+  follow_up(s, "change it to ipairs")
+  wait_state(s, "review")
+  eq(s.proposal[1], "local function total(items)")
+  eq(answer_text(s), nil, "the answer gives way to the proposal")
+  eq(#last_request().body.messages, 6)
+
+  follow_up(s, "why that?")
+  wait_state(s, "answered")
+  text = assert(answer_text(s))
+  truthy(text:find("› change it to ipairs\n*Proposed an edit.*", 1, true), text)
+  msgs = last_request().body.messages
+  truthy(msgs[7].content:find("<code>\nlocal function total", 1, true), msgs[7].content)
+  eq(buf_lines(), SAMPLE)
+end)
+
+test("an edit asked for under an answer starts from the current lines", function()
+  use("route")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  vim.api.nvim_buf_set_lines(0, 3, 4, false, { "  local sum = 1" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0 })
+  follow_up(s, "change it to ipairs")
+  wait_state(s, "review")
+  eq(s.stale, false)
+  truthy(
+    last_request().body.messages[4].content:find(
+      "The selection now reads:\n<selection>\nfunction M.total(items)\n  local sum = 1",
+      1,
+      true
+    ),
+    last_request().body.messages[4].content
+  )
+  s:accept()
+  eq(buf_lines()[3], "local function total(items)")
+end)
+
 test("whole file is sent; large files are cut at whole lines", function()
   use("fast")
   local big = {}

@@ -25,7 +25,8 @@ local sessions = {}
 ---@field mark integer
 ---@field focus_marks integer[]|nil Highlighted characters of a characterwise selection, one mark per line.
 ---@field mark_ns integer
----@field original string[]
+---@field original string[] The selected lines a proposal replaces.
+---@field seen string[] The selected lines as the model last saw them.
 ---@field ctx leader_k.Context
 ---@field filetype string
 ---@field indent_width integer
@@ -143,7 +144,7 @@ function Session:update_proposal()
     self.answer_text = ex.kind == "answer" and ex.text or self:fence(ex.text)
   elseif ex.kind == "code" then
     self.phase = "writing"
-    self.proposal = prompt.lines(ex.text, self.ctx, false)
+    self.proposal = prompt.lines(ex.text, self.ctx, false, self.original)
     self.hunks = diff(self.original, self.proposal)
   elseif self.phase == "waiting" then
     self.phase = "thinking"
@@ -434,6 +435,8 @@ end
 function Session:save_review()
   self.prev = {
     state = self.state,
+    original = self.original,
+    seen = self.seen,
     turns = vim.deepcopy(self.turns),
     instruction = self.instruction,
     proposal = self.proposal,
@@ -454,6 +457,7 @@ function Session:restore_review()
   self:stop_timer()
   self:set_busy(false)
   self.turns, self.instruction = p.turns, p.instruction
+  self.original, self.seen = p.original, p.seen
   self.proposal, self.hunks, self.added, self.removed = p.proposal, p.hunks, p.added, p.removed
   self.state, self.phase, self.answer_text = p.state, nil, nil
   self.stale = not same_lines(self:region_lines(), self.original)
@@ -569,7 +573,7 @@ function Session:finish(finish_reason)
   if finish_reason == "length" then
     return self:fail("the reply hit the model's output limit before it finished")
   end
-  self.proposal = prompt.lines(ex.text, self.ctx, true)
+  self.proposal = prompt.lines(ex.text, self.ctx, true, self.original)
   self.hunks = diff(self.original, self.proposal)
   self.added, self.removed = 0, 0
   for _, h in ipairs(self.hunks) do
@@ -657,10 +661,19 @@ function Session:refine()
         return
       end
       self:save_review()
+      if answered then
+        -- The code may have changed while the answer was read. An edit
+        -- replaces what is there now.
+        self.original, self.stale = self:region_lines(), false
+      end
       if text == "" then
         last.proposal, last.answer = nil, nil -- Regenerate the same turn.
       else
-        table.insert(self.turns, { instruction = text })
+        local turn = { instruction = text }
+        if not same_lines(self.original, self.seen) then
+          self.seen, turn.selection = self.original, self.original
+        end
+        table.insert(self.turns, turn)
       end
       self:send()
     end,
@@ -778,6 +791,7 @@ function M.start(r0, r1, instruction, opts)
     -- Read the selection again in case it changed while typing.
     local r0_, r1_ = render.region(self)
     self.original = vim.api.nvim_buf_get_lines(buf, r0_, r1_ + 1, false)
+    self.seen = self.original
     self:build_context()
     self.turns = { { instruction = text } }
     self:send()

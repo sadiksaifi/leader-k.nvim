@@ -60,6 +60,7 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 ---@field instruction string
 ---@field proposal string[]|nil The proposed edit, once the reply was code.
 ---@field answer string|nil The Markdown answer, once the reply was an answer.
+---@field selection string[]|nil The selected lines, when they changed since the model last saw them.
 
 -- How the user's text is introduced in each mode.
 local LABEL = { auto = "Request", edit = "Instruction", ask = "Question" }
@@ -146,7 +147,16 @@ local function follow_up(turn, prev, mode)
   else
     ask = "Revise your replacement for the same selection. Reply with the full new region in <code></code> again."
   end
-  return ask .. "\n\n" .. LABEL[mode] .. ": " .. turn.instruction
+  local out = { ask, "", LABEL[mode] .. ": " .. turn.instruction }
+  if turn.selection then
+    table.insert(out, 1, "")
+    table.insert(
+      out,
+      1,
+      "The selection now reads:\n<selection>\n" .. table.concat(turn.selection, "\n") .. "\n</selection>"
+    )
+  end
+  return table.concat(out, "\n")
 end
 
 ---@param ctx leader_k.Context
@@ -302,8 +312,9 @@ end
 ---@param text string
 ---@param ctx leader_k.Context
 ---@param final boolean Apply the cleanups that need the whole reply.
+---@param selection string[]|nil The lines being replaced, when not `ctx.selection`.
 ---@return string[]
-function M.lines(text, ctx, final)
+function M.lines(text, ctx, final, selection)
   if final then
     text = text:gsub("\n$", "")
   end
@@ -312,8 +323,9 @@ function M.lines(text, ctx, final)
     return {}
   end
 
+  local sel = selection or ctx.selection
   -- Models often drop the base indentation of an indented selection.
-  local want, got = base_indent(ctx.selection), base_indent(lines)
+  local want, got = base_indent(sel), base_indent(lines)
   if want and want ~= "" and got == "" then
     for i, l in ipairs(lines) do
       if l:find("%S") then
@@ -326,7 +338,6 @@ function M.lines(text, ctx, final)
     return lines
   end
 
-  local sel = ctx.selection
   -- Drop lines the model echoed from the surrounding context.
   local before, after = ctx.before, ctx.after
   for n = math.min(#lines - 1, #before, 20), 1, -1 do

@@ -25,13 +25,13 @@ local function code_window(s)
   return vim.fn.win_findbuf(s.buf)[1]
 end
 
----Each answered turn as its question, then its answer.
+---Each turn as its question, then its answer or a note about its edit.
 ---@param s leader_k.Session
 ---@return string[] lines, integer[] questions 0-based rows of question lines, integer latest 0-based row where the last turn starts
 local function transcript(s)
   local out, questions, latest = {}, {}, 0
   for i, turn in ipairs(s.turns) do
-    local text = turn.answer
+    local text = turn.answer or (turn.proposal and "*Proposed an edit.*")
     if i == #s.turns and s.state == "running" then
       text = s.answer_text
     end
