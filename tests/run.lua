@@ -528,6 +528,101 @@ test("stopping a refine keeps the previous proposal", function()
   eq(#s.turns, 1)
 end)
 
+local function last_request()
+  return vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
+end
+
+---@return string text of the answer float, or nil when it is closed.
+local function answer_text(s)
+  local win = s.answer_win
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return nil
+  end
+  return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false), "\n")
+end
+
+test("ask streams a Markdown answer into a float and leaves the code alone", function()
+  use("answer_slow")
+  vim.bo.filetype = "lua"
+  lines(SAMPLE)
+  local code_win = vim.api.nvim_get_current_win()
+  lk.run(3, 9, "why multiply?", { mode = "ask" })
+  local s = assert(session.get(0))
+  local streamed = false
+  vim.wait(10000, function()
+    streamed = streamed or (s.state == "running" and answer_text(s) ~= nil)
+    return s.state ~= "running"
+  end, 5)
+  truthy(streamed, "the float opened while the answer streamed")
+  eq(s.state, "answered")
+  local text = assert(answer_text(s))
+  truthy(text:find("why multiply?", 1, true), "question shown: " .. text)
+  truthy(text:find("It multiplies each `price` by its `qty`.\n\n```lua\nlocal x = price * qty\n```", 1, true), text)
+  truthy(not text:find("answer>", 1, true), "tags stripped: " .. text)
+  eq(vim.bo[vim.api.nvim_win_get_buf(s.answer_win)].filetype, "markdown")
+  eq(vim.api.nvim_get_current_win(), code_win, "focus stays in the code")
+  eq(buf_lines(), SAMPLE, "buffer untouched")
+  local req = last_request()
+  truthy(req.body.messages[1].content:find("<answer>", 1, true), "ask system prompt")
+  truthy(req.body.messages[2].content:find("Question: why multiply?", 1, true), "question in prompt")
+end)
+
+test("ask shows a code reply as an answer and never edits", function()
+  use("fast")
+  vim.bo.filetype = "lua"
+  lines(SAMPLE)
+  lk.run(3, 9, "show me ipairs", { mode = "ask" })
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  truthy(assert(answer_text(s)):find("```lua\nlocal function total(items)", 1, true), answer_text(s))
+  eq(s.proposal, nil)
+end)
+
+test("a truncated answer is kept with a note", function()
+  use("answer_length")
+  lines(SAMPLE)
+  lk.run(3, 9, "explain", { mode = "ask" })
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  local text = assert(answer_text(s))
+  truthy(text:find("The first half", 1, true), text)
+  truthy(text:find("output limit", 1, true), text)
+end)
+
+test("closing an answer leaves nothing behind", function()
+  use("answer")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?", { mode = "ask" })
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  vim.cmd("normal! 3G")
+  vim.api.nvim_feedkeys(vim.keycode("<BS>"), "x", false)
+  eq(session.get(0), nil, "Backspace closes the answer")
+  eq(answer_text(s), nil, "float closed")
+  eq(#marks(), 0)
+
+  lk.run(3, 9, "why?", { mode = "ask" })
+  s = assert(session.get(0))
+  wait_state(s, "answered")
+  local code_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_set_current_win(s.answer_win)
+  vim.api.nvim_feedkeys("q", "x", false)
+  eq(session.get(0), nil, "q in the float closes the answer")
+  eq(vim.api.nvim_get_current_win(), code_win, "focus returns to the code")
+  eq(#marks(), 0)
+end)
+
+test("stopping an answer closes it", function()
+  use("hang")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?", { mode = "ask" })
+  local s = assert(session.get(0))
+  vim.wait(200)
+  vim.api.nvim_feedkeys(vim.keycode("<C-c>"), "x", false)
+  eq(session.get(0), nil)
+  eq(http.active_count(), 0)
+end)
+
 test("whole file is sent; large files are cut at whole lines", function()
   use("fast")
   local big = {}

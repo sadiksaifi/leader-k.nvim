@@ -40,6 +40,19 @@ function M.open()
   require("leader-k.session").start(r0, r1)
 end
 
+---Starts a session on lines l1..l2 (1-based), sending `instruction` right
+---away when it is not empty.
+---@param l1 integer
+---@param l2 integer
+---@param instruction string|nil
+---@param opts { mode: leader_k.Mode|nil }|nil
+function M.run(l1, l2, instruction, opts)
+  if not did_setup then
+    M.setup()
+  end
+  require("leader-k.session").start(l1 - 1, l2 - 1, instruction, opts)
+end
+
 ---Starts an edit of lines l1..l2 (1-based), sending `instruction` right away
 ---when it is not empty. Backs the :LeaderK command.
 ---@param l1 integer

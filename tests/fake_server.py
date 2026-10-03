@@ -20,6 +20,21 @@ local function total(items)
 end
 </code>"""
 
+ANSWER = """<answer>
+It multiplies each `price` by its `qty`.
+
+```lua
+local x = price * qty
+```
+</answer>"""
+
+def stream(send, text, delay=0.0):
+    # Split mid-tag and mid-line to exercise buffering.
+    for i in range(0, len(text), 7):
+        send(chunk(content=text[i:i+7])); time.sleep(delay)
+    send(chunk(content="", finish="stop"))
+    send(b"data: [DONE]\n\n")
+
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def log_message(self, *a): pass
@@ -57,6 +72,10 @@ class H(BaseHTTPRequestHandler):
                     send(chunk(content=text[i:i+7])); time.sleep(delay)
                 send(chunk(content="", finish="stop"))
                 send(b"data: [DONE]\n\n"); return
+            if model in ('answer', 'answer_slow'):
+                stream(send, ANSWER, 0.05 if model == 'answer_slow' else 0.0); return
+            if model == 'answer_length':
+                send(chunk(content="<answer>\nThe first half")); send(chunk(content="", finish="length")); send(b"data: [DONE]\n\n"); return
             if model == 'midstream':
                 send(chunk(content="<code>\nlocal x = ")); time.sleep(0.2)
                 send(chunk(content="", finish="error", error={"code": "server_error", "message": "Provider disconnected unexpectedly"})); return

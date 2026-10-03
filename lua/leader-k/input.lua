@@ -21,8 +21,9 @@ local ns = vim.api.nvim_create_namespace("leader-k.input")
 ---@field on_cancel fun()
 ---@field on_layout fun(rows: integer) Screen rows the float needs above the selection, 0 once closed.
 
+---Rows a float's border takes up.
 ---@param pwin integer
-local function border_rows(pwin)
+function M.border_rows(pwin)
   local b = vim.api.nvim_win_get_config(pwin).border
   if b == nil or b == "none" or b == "" then
     return 0
@@ -81,7 +82,7 @@ function M.open(opts)
 
   local origin_cursor = vim.api.nvim_win_get_cursor(win)
   local pwin = vim.api.nvim_open_win(pbuf, true, config)
-  local borders = border_rows(pwin)
+  local borders = M.border_rows(pwin)
   local reserved = -1
   vim.wo[pwin].wrap = true
   vim.wo[pwin].linebreak = true

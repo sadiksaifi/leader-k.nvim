@@ -243,6 +243,8 @@ local function header(s, now, width)
       add("Waiting for " .. s.model_label, "LeaderKStatus")
     elseif s.phase == "thinking" then
       add("Thinking", "LeaderKStatus")
+    elseif s.phase == "answering" then
+      add("Answering", "LeaderKStatus")
     else
       local n = s.proposal and #s.proposal or 0
       add(("Writing %d %s"):format(n, n == 1 and "line" or "lines"), "LeaderKStatus")
@@ -252,6 +254,14 @@ local function header(s, now, width)
     end
     add("  ", "")
     hint(o.keys.cancel, "stop")
+  elseif s.state == "answered" then
+    add("Answered", "LeaderKStatus")
+    if instruction ~= "" then
+      add("  " .. instruction, "LeaderKInstruction")
+    end
+    add("  ", "")
+    hint(o.keys.reject, "close")
+    hint(o.keys.refine, "follow up")
   elseif s.state == "review" then
     if s.stale then
       add("Selection edited after the request.", "LeaderKWarn")

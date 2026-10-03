@@ -2,7 +2,11 @@
 
 local M = {}
 
-M.system = [[
+---@alias leader_k.Mode "auto"|"edit"|"ask"
+
+-- One system prompt per mode. Each names the reply tags the mode accepts.
+M.system = {
+  edit = [[
 You edit code in Neovim. The user selected a region of a file and asked for a change to it.
 
 Reply with the complete new text for the selected region inside one <code></code> block, and nothing else.
@@ -11,7 +15,17 @@ Reply with the complete new text for the selected region inside one <code></code
 - Keep the file's indentation style (tabs or spaces) and the selection's base indentation.
 - No markdown fences, no commentary, no text outside the block.
 - If the instruction cannot be done by rewriting this selection, reply with <error>one short sentence</error> instead.
-]]
+]],
+  ask = [[
+You answer questions about code in Neovim. The user selected a region of a file and asked about it.
+
+Reply inside one <answer></answer> block, in Markdown, and nothing else.
+- Lead with the answer. Keep it short: it is shown in a small window next to the code.
+- Refer to code by its line number in the file.
+- Put code in fenced blocks with a language tag.
+- Do not repeat the whole selection.
+]],
+}
 
 ---@class leader_k.Context
 ---@field path string
@@ -27,11 +41,16 @@ Reply with the complete new text for the selected region inside one <code></code
 
 ---@class leader_k.Turn
 ---@field instruction string
----@field proposal string[]|nil
+---@field proposal string[]|nil The proposed edit, once the reply was code.
+---@field answer string|nil The Markdown answer, once the reply was an answer.
+
+-- How the user's text is introduced in each mode.
+local LABEL = { edit = "Instruction", ask = "Question" }
 
 ---@param ctx leader_k.Context
 ---@param instruction string
-local function first_message(ctx, instruction)
+---@param mode leader_k.Mode
+local function first_message(ctx, instruction, mode)
   local out = {}
   local ft = ctx.filetype ~= "" and ctx.filetype or "plain text"
   local r0 = ctx.first_row
@@ -71,52 +90,111 @@ local function first_message(ctx, instruction)
     vim.list_extend(out, ctx.diagnostics)
   end
   out[#out + 1] = ""
-  out[#out + 1] = "Instruction: " .. instruction
+  out[#out + 1] = LABEL[mode] .. ": " .. instruction
   return table.concat(out, "\n")
+end
+
+---@param turn leader_k.Turn
+local function reply_of(turn)
+  if turn.answer then
+    return "<answer>\n" .. turn.answer .. "\n</answer>"
+  end
+  return "<code>\n" .. table.concat(turn.proposal or {}, "\n") .. "\n</code>"
+end
+
+---@param turn leader_k.Turn
+---@param prev leader_k.Turn
+---@param mode leader_k.Mode
+local function follow_up(turn, prev, mode)
+  local ask
+  if mode == "ask" then
+    ask = "Answer the follow-up about the same selection in <answer></answer> again."
+  elseif prev.answer then
+    ask = "Reply with the full new region for the same selection in <code></code>."
+  else
+    ask = "Revise your replacement for the same selection. Reply with the full new region in <code></code> again."
+  end
+  return ask .. "\n\n" .. LABEL[mode] .. ": " .. turn.instruction
 end
 
 ---@param ctx leader_k.Context
 ---@param turns leader_k.Turn[] The last turn is the one being requested.
+---@param mode leader_k.Mode
 ---@return { role: string, content: string }[]
-function M.messages(ctx, turns)
+function M.messages(ctx, turns, mode)
   local msgs = {
-    { role = "system", content = M.system },
-    { role = "user", content = first_message(ctx, turns[1].instruction) },
+    { role = "system", content = M.system[mode] },
+    { role = "user", content = first_message(ctx, turns[1].instruction, mode) },
   }
   for i = 2, #turns do
-    local prev = turns[i - 1].proposal or {}
-    msgs[#msgs + 1] = { role = "assistant", content = "<code>\n" .. table.concat(prev, "\n") .. "\n</code>" }
-    msgs[#msgs + 1] = {
-      role = "user",
-      content = "Revise your replacement for the same selection. Reply with the full new region in <code></code> again.\n\nInstruction: "
-        .. turns[i].instruction,
-    }
+    msgs[#msgs + 1] = { role = "assistant", content = reply_of(turns[i - 1]) }
+    msgs[#msgs + 1] = { role = "user", content = follow_up(turns[i], turns[i - 1], mode) }
   end
   return msgs
 end
 
 ---@class leader_k.Extract
----@field kind "pending"|"code"|"error"
+---@field kind "pending"|"code"|"answer"|"error"
 ---@field text string
 ---@field complete boolean
 
-local CLOSE = "</code>"
+---Returns the block body up to its closing tag, and whether the tag was seen.
+---@param body string Text after the opening tag.
+---@param close string
+---@param final boolean
+local function block(body, close, final)
+  -- The block itself can contain its closing tag (HTML, Markdown), so only
+  -- the last one ends it. While streaming, that is one with nothing but
+  -- whitespace after it so far.
+  local ce
+  if final then
+    local at = body:find(close, 1, true)
+    while at do
+      ce = at
+      at = body:find(close, at + 1, true)
+    end
+  else
+    ce = body:find(close .. "%s*$")
+  end
+  if ce then
+    body = body:sub(1, ce - 1)
+  elseif not final then
+    -- Hold back a partial closing tag so it never flashes on screen.
+    for k = #close - 1, 1, -1 do
+      if body:sub(-k) == close:sub(1, k) then
+        body = body:sub(1, -k - 1)
+        break
+      end
+    end
+  end
+  return body:gsub("^\n", ""), ce ~= nil
+end
 
----Reads the model output streamed so far.
+---Reads the model output streamed so far. The first tag in the reply decides
+---its kind. A finished reply without tags is read as `untagged`.
 ---@param raw string
 ---@param final boolean
+---@param untagged "code"|"answer"|nil Default "code".
 ---@return leader_k.Extract
-function M.extract(raw, final)
+function M.extract(raw, final, untagged)
   raw = raw:gsub("\r\n", "\n")
-  local cs = raw:find("<code>", 1, true)
-  local es = raw:find("<error>", 1, true)
-  if es and (not cs or es < cs) then
-    local ee = raw:find("</error>", es, true)
-    return { kind = "error", text = vim.trim(raw:sub(es + 7, ee and ee - 1 or -1)), complete = ee ~= nil }
+  local kind, at
+  for _, k in ipairs({ "code", "answer", "error" }) do
+    local p = raw:find("<" .. k .. ">", 1, true)
+    if p and (not at or p < at) then
+      kind, at = k, p
+    end
   end
-  if not cs then
+  if kind == "error" then
+    local ee = raw:find("</error>", at, true)
+    return { kind = "error", text = vim.trim(raw:sub(at + 7, ee and ee - 1 or -1)), complete = ee ~= nil }
+  end
+  if not kind then
     if not final then
       return { kind = "pending", text = "", complete = false }
+    end
+    if untagged == "answer" then
+      return { kind = "answer", text = vim.trim(raw), complete = true }
     end
     -- The model ignored the format. Use a fenced block if there is one,
     -- otherwise the whole reply.
@@ -125,40 +203,21 @@ function M.extract(raw, final)
     local text = (fenced or raw):gsub("^%s*\n", ""):gsub("%s+$", "")
     return { kind = "code", text = text, complete = true }
   end
-  local body = raw:sub(cs + #"<code>")
-  -- The code itself can contain </code> (HTML, Markdown), so only the last
-  -- closing tag ends the block. While streaming, that is one with nothing
-  -- but whitespace after it so far.
-  local ce
-  if final then
-    local at = body:find(CLOSE, 1, true)
-    while at do
-      ce = at
-      at = body:find(CLOSE, at + 1, true)
+  local body, complete = block(raw:sub(at + #kind + 2), "</" .. kind .. ">", final)
+  if kind == "answer" then
+    if final then
+      body = vim.trim(body)
     end
-  else
-    ce = body:find(CLOSE .. "%s*$")
+    return { kind = "answer", text = body, complete = complete }
   end
-  if ce then
-    body = body:sub(1, ce - 1)
-  elseif not final then
-    -- Hold back a partial closing tag so it never flashes on screen.
-    for k = #CLOSE - 1, 1, -1 do
-      if body:sub(-k) == CLOSE:sub(1, k) then
-        body = body:sub(1, -k - 1)
-        break
-      end
-    end
-  end
-  body = body:gsub("^\n", "")
   -- Some models wrap the block content in a fence anyway.
   local inner = body:match("^```[%w_+.#-]*\n(.-)\n?```%s*$")
   if inner then
     body = inner
-  elseif not ce and body:match("^```[%w_+.#-]*\n") then
+  elseif not complete and body:match("^```[%w_+.#-]*\n") then
     body = body:gsub("^```[%w_+.#-]*\n", "")
   end
-  return { kind = "code", text = body, complete = ce ~= nil }
+  return { kind = "code", text = body, complete = complete }
 end
 
 ---@param line string

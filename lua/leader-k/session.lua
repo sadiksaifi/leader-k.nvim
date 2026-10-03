@@ -1,6 +1,8 @@
--- One edit of one selection: prompt, request, review, and the way back to
--- the code. At most one session exists per buffer.
+-- One conversation about one selection: prompt, request, then a proposed
+-- edit to review or an answer to read, and follow-ups. At most one session
+-- exists per buffer.
 
+local answer = require("leader-k.answer")
 local config = require("leader-k.config")
 local context = require("leader-k.context")
 local input = require("leader-k.input")
@@ -27,8 +29,9 @@ local sessions = {}
 ---@field filetype string
 ---@field indent_width integer
 ---@field model_label string
----@field state "prompt"|"running"|"review"|"closed"
----@field phase "waiting"|"thinking"|"writing"|nil
+---@field mode leader_k.Mode
+---@field state "prompt"|"running"|"review"|"answered"|"closed"
+---@field phase "waiting"|"thinking"|"writing"|"answering"|nil
 ---@field turns leader_k.Turn[]
 ---@field instruction string|nil
 ---@field proposal string[]|nil
@@ -36,6 +39,11 @@ local sessions = {}
 ---@field added integer
 ---@field removed integer
 ---@field raw string
+---@field answer_text string|nil The answer streamed so far.
+---@field answer_win integer|nil
+---@field answer_buf integer|nil
+---@field answer_lines string|nil Text the answer buffer holds.
+---@field answer_shown integer|nil Turn the float last scrolled to.
 ---@field error string|nil The last failure, kept for callers and tests.
 ---@field prev table|nil The review a refine started from, restored if it fails.
 ---@field stale boolean
@@ -112,6 +120,13 @@ end
 
 function Session:draw()
   render.draw(self)
+  answer.sync(self)
+end
+
+---Wraps code in a Markdown fence for the answer view.
+---@param code string
+function Session:fence(code)
+  return ("```%s\n%s\n```"):format(self.filetype, code)
 end
 
 -- Parses the reply streamed so far. Runs at most once per frame: the work
@@ -122,7 +137,10 @@ function Session:update_proposal()
   end
   self.dirty = false
   local ex = prompt.extract(self.raw, false)
-  if ex.kind == "code" then
+  if ex.kind == "answer" or (ex.kind == "code" and self.mode == "ask") then
+    self.phase = "answering"
+    self.answer_text = ex.kind == "answer" and ex.text or self:fence(ex.text)
+  elseif ex.kind == "code" then
     self.phase = "writing"
     self.proposal = prompt.lines(ex.text, self.ctx, false)
     self.hunks = diff(self.original, self.proposal)
@@ -186,6 +204,7 @@ function Session:destroy()
   self:stop_timer()
   self:set_busy(false)
   pcall(vim.api.nvim_del_augroup_by_id, self.augroup)
+  answer.close(self)
   if vim.api.nvim_buf_is_valid(self.buf) then
     render.clear(self.buf)
     pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, self.mark)
@@ -313,7 +332,7 @@ function Session:install_maps()
     end,
     "refine",
     function()
-      return self.state == "review"
+      return self.state == "review" or self.state == "answered"
     end
   )
 end
@@ -356,6 +375,7 @@ end
 -- Snapshot of the review a refine starts from.
 function Session:save_review()
   self.prev = {
+    state = self.state,
     turns = vim.deepcopy(self.turns),
     instruction = self.instruction,
     proposal = self.proposal,
@@ -377,7 +397,7 @@ function Session:restore_review()
   self:set_busy(false)
   self.turns, self.instruction = p.turns, p.instruction
   self.proposal, self.hunks, self.added, self.removed = p.proposal, p.hunks, p.added, p.removed
-  self.state, self.phase = "review", nil
+  self.state, self.phase, self.answer_text = p.state, nil, nil
   self.stale = not same_lines(self:region_lines(), self.original)
   self:draw()
   return true
@@ -413,10 +433,11 @@ function Session:send()
   self.model_label = model_label(ep.model)
   self.state, self.phase = "running", "waiting"
   self.raw, self.proposal, self.hunks, self.error, self.dirty = "", nil, nil, nil, false
+  self.answer_text = nil
   self.added, self.removed = 0, 0
   self.instruction = self.turns[#self.turns].instruction
 
-  local messages = prompt.messages(self.ctx, self.turns)
+  local messages = prompt.messages(self.ctx, self.turns, self.mode)
   local cancel, start_err = provider.stream(ep, messages, {
     on_reasoning = function()
       if self.phase == "waiting" then
@@ -447,6 +468,18 @@ function Session:send()
   self:draw()
 end
 
+---Tells the user where a reply landed when they are looking elsewhere.
+---@param what string
+function Session:notify_ready(what)
+  if vim.api.nvim_get_current_buf() ~= self.buf and not answer.focused(self) then
+    local r0 = render.region(self)
+    vim.api.nvim_echo({
+      { ("leader-k: %s ready in "):format(what) },
+      { ("%s:%d"):format(self.ctx.path, r0 + 1), "Directory" },
+    }, false, {})
+  end
+end
+
 ---@param finish_reason string|nil
 function Session:finish(finish_reason)
   self:stop_timer()
@@ -455,11 +488,28 @@ function Session:finish(finish_reason)
   if ex.kind == "error" then
     return self:fail("the model declined: " .. (ex.text ~= "" and ex.text or "no reason given"))
   end
-  if finish_reason == "length" then
-    return self:fail("the reply hit the model's output limit before it finished")
-  end
   if vim.trim(self.raw) == "" then
     return self:fail("the model returned an empty reply")
+  end
+  local turn = self.turns[#self.turns]
+  if ex.kind == "answer" or self.mode == "ask" then
+    local text = ex.kind == "answer" and ex.text or self:fence(ex.text)
+    if vim.trim(text) == "" then
+      return self:fail("the model returned an empty reply")
+    end
+    -- Part of an answer still helps, unlike part of an edit.
+    if finish_reason == "length" then
+      text = text .. "\n\n*The reply hit the model's output limit before it finished.*"
+    end
+    turn.answer, turn.proposal = text, nil
+    self.prev, self.answer_text = nil, nil
+    self.state, self.phase = "answered", nil
+    self:draw()
+    self:notify_ready("answer")
+    return
+  end
+  if finish_reason == "length" then
+    return self:fail("the reply hit the model's output limit before it finished")
   end
   self.proposal = prompt.lines(ex.text, self.ctx, true)
   self.hunks = diff(self.original, self.proposal)
@@ -468,18 +518,12 @@ function Session:finish(finish_reason)
     self.removed = self.removed + h[2]
     self.added = self.added + h[4]
   end
-  self.turns[#self.turns].proposal = self.proposal
+  turn.proposal, turn.answer = self.proposal, nil
   self.prev = nil
   self.state, self.phase = "review", nil
   self.stale = not same_lines(self:region_lines(), self.original)
   self:draw()
-  if vim.api.nvim_get_current_buf() ~= self.buf then
-    local r0 = render.region(self)
-    vim.api.nvim_echo({
-      { "leader-k: proposal ready in " },
-      { ("%s:%d"):format(self.ctx.path, r0 + 1), "Directory" },
-    }, false, {})
-  end
+  self:notify_ready("proposal")
 end
 
 function Session:accept()
@@ -523,23 +567,29 @@ function Session:accept()
   end
 end
 
+---Asks for a follow-up to the proposal or answer on screen.
 function Session:refine()
-  if self.state ~= "review" then
+  if self.state ~= "review" and self.state ~= "answered" then
     return
   end
   local r0, r1 = render.region(self)
   local last = self.turns[#self.turns]
   local win = vim.api.nvim_get_current_win()
   if vim.api.nvim_win_get_buf(win) ~= self.buf then
-    win = self.win
+    win = vim.api.nvim_win_is_valid(self.win) and vim.api.nvim_win_get_buf(self.win) == self.buf and self.win
+      or vim.fn.win_findbuf(self.buf)[1]
   end
+  if not win then
+    return
+  end
+  local answered = self.state == "answered"
   input.open({
     win = win,
     r0 = r0,
     r1 = r1,
-    title = " Refine ",
+    title = answered and " Follow up " or " Refine ",
     footer = " " .. model_label(config.options.model or "") .. " ",
-    placeholder = "What should change? Enter alone regenerates",
+    placeholder = (answered and "Ask a follow-up." or "What should change?") .. " Enter alone regenerates",
     allow_empty = true,
     on_layout = function(rows)
       self:set_reserve(rows)
@@ -550,9 +600,8 @@ function Session:refine()
       end
       self:save_review()
       if text == "" then
-        last.proposal = nil -- Regenerate the same turn.
+        last.proposal, last.answer = nil, nil -- Regenerate the same turn.
       else
-        last.proposal = self.proposal
         table.insert(self.turns, { instruction = text })
       end
       self:send()
@@ -566,12 +615,14 @@ end
 ---@param r0 integer
 ---@param r1 integer
 ---@param instruction string|nil
-function M.start(r0, r1, instruction)
+---@param opts { mode: leader_k.Mode|nil }|nil
+function M.start(r0, r1, instruction, opts)
+  local mode = (opts or {}).mode or "edit"
   local win = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_win_get_buf(win)
   local existing = sessions[buf]
   if existing then
-    if existing.state == "review" then
+    if existing.state == "review" or existing.state == "answered" then
       existing:refine()
     elseif existing.state == "running" then
       vim.api.nvim_echo({
@@ -582,7 +633,7 @@ function M.start(r0, r1, instruction)
     end
     return
   end
-  if not vim.bo[buf].modifiable then
+  if mode ~= "ask" and not vim.bo[buf].modifiable then
     vim.api.nvim_echo({ { "leader-k: this buffer is not modifiable", "WarningMsg" } }, false, {})
     return
   end
@@ -596,6 +647,7 @@ function M.start(r0, r1, instruction)
   local self = setmetatable({
     buf = buf,
     win = win,
+    mode = mode,
     mark_ns = mark_ns,
     state = "prompt",
     turns = {},
@@ -627,6 +679,7 @@ function M.start(r0, r1, instruction)
     buffer = buf,
     callback = function()
       self:check_stale()
+      answer.sync(self)
     end,
   })
   vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
@@ -634,6 +687,14 @@ function M.start(r0, r1, instruction)
     buffer = buf,
     callback = function()
       self:destroy()
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = self.augroup,
+    callback = function(ev)
+      if tonumber(ev.match) ~= self.answer_win then
+        answer.sync(self)
+      end
     end,
   })
   vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
@@ -667,14 +728,20 @@ function M.start(r0, r1, instruction)
   vim.api.nvim_win_set_cursor(win, { r0 + 1, 0 })
   vim.cmd.normal({ "^", bang = true })
   self.reserve = 0
-  local n = r1 - r0 + 1
+  local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
+  local title, placeholder
+  if mode == "ask" then
+    title, placeholder = "Ask about " .. where, "Ask a question."
+  else
+    title, placeholder = "Edit " .. where, "Describe the change."
+  end
   input.open({
     win = win,
     r0 = r0,
     r1 = r1,
-    title = n == 1 and (" Edit line %d "):format(r0 + 1) or (" Edit lines %d-%d "):format(r0 + 1, r1 + 1),
+    title = " " .. title .. " ",
     footer = " " .. model_label(config.options.model or "no model set") .. " ",
-    placeholder = "Describe the change. Enter sends, Esc cancels",
+    placeholder = placeholder .. " Enter sends, Esc cancels",
     on_layout = function(rows)
       self:set_reserve(rows)
     end,

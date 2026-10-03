@@ -64,6 +64,7 @@ function M.setup()
   set("LeaderKPlaceholder", { link = "NonText" })
   set("LeaderKFooter", { link = "NonText" })
   set("LeaderKFlash", { link = "LeaderKAdd" })
+  set("LeaderKQuestion", { link = "Title" })
 end
 
 return M
