@@ -315,9 +315,10 @@ local function open_panel(s)
   vim.wo[iwin].statuscolumn = "  "
   -- The rows around the box stay plain: a blank row above the divider and a
   -- dim line of hints below the box, where windows have status lines.
-  vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal,WinSeparator:Normal"
+  vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal"
   -- With a global status line, the blank row is a window separator; its
-  -- joint with the code window's border stays a plain vertical line.
+  -- joint with the code window's border stays a plain vertical line, in
+  -- the border's own WinSeparator color.
   local vert = vim.opt.fillchars:get().vert or "│"
   vim.wo[awin].fillchars = "eob: ,stl: ,stlnc: ,horiz: ,horizup: ,horizdown: ,vertright:" .. vert
   vim.wo[awin].statusline = " "
