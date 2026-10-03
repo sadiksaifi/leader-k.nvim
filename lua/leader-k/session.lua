@@ -19,6 +19,56 @@ local FRAME_MS = 80
 ---@type table<integer, leader_k.Session>
 local sessions = {}
 
+-- How long a conversation can be resumed after its proposal is accepted.
+local RESUME_MS = 120000
+
+---@class leader_k.Recent
+---@field mark integer Extmark over the accepted lines.
+---@field turns leader_k.Turn[]
+---@field ctx leader_k.Context
+---@field mode leader_k.Mode
+---@field seen string[]
+---@field expires integer
+
+---The last accepted conversation per buffer.
+---@type table<integer, leader_k.Recent>
+local recent = {}
+
+---@param buf integer
+local function forget(buf)
+  local r = recent[buf]
+  recent[buf] = nil
+  if r and vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_del_extmark, buf, mark_ns, r.mark)
+  end
+end
+
+---Returns the accepted conversation to resume for a request on rows r0..r1,
+---and the rows it covers now, or nil.
+---@param buf integer
+---@param r0 integer
+---@param r1 integer
+---@param mode leader_k.Mode
+---@return leader_k.Recent|nil, integer|nil, integer|nil
+local function resumable(buf, r0, r1, mode)
+  local r = recent[buf]
+  if not r then
+    return nil
+  end
+  local m = vim.api.nvim_buf_get_extmark_by_id(buf, mark_ns, r.mark, { details = true })
+  if not m[1] or vim.uv.now() > r.expires then
+    forget(buf)
+    return nil
+  end
+  local q0, q1 = m[1], math.max(m[1], m[3].end_row or m[1])
+  -- The same lines, or the cursor line inside them in Normal mode.
+  local hit = (r0 == q0 and r1 == q1) or (r0 == r1 and r0 >= q0 and r0 <= q1)
+  if not hit or r.mode ~= mode then
+    return nil
+  end
+  return r, q0, q1
+end
+
 ---@class leader_k.Session
 ---@field buf integer
 ---@field win integer
@@ -55,6 +105,7 @@ local sessions = {}
 ---@field saved_maps table[]
 ---@field augroup integer
 ---@field busy boolean
+---@field resumed boolean Continues a conversation whose proposal was accepted.
 ---@field reserve integer Blank rows kept above the selection for the prompt float.
 ---@field reveal boolean Scroll the header into view on the next draw.
 ---@field spans_for string[]|nil Proposal the cached syntax spans belong to.
@@ -554,6 +605,10 @@ function Session:finish(finish_reason)
     return self:fail("the model returned an empty reply")
   end
   local turn = self.turns[#self.turns]
+  if self.resumed then
+    self.resumed = false
+    forget(self.buf)
+  end
   if ex.kind == "answer" or self.mode == "ask" then
     local text = ex.kind == "answer" and ex.text or self:fence(ex.text)
     if vim.trim(text) == "" then
@@ -588,6 +643,30 @@ function Session:finish(finish_reason)
   self:notify_ready("proposal")
 end
 
+---Keeps the conversation after its proposal is applied to rows r0..r1, so
+---asking again on those lines soon after continues it.
+---@param r0 integer
+---@param r1 integer
+---@param lines string[]
+function Session:remember(r0, r1, lines)
+  forget(self.buf)
+  local turns = vim.deepcopy(self.turns)
+  turns[#turns].applied = true
+  recent[self.buf] = {
+    mark = vim.api.nvim_buf_set_extmark(self.buf, mark_ns, r0, 0, {
+      end_row = r1,
+      end_col = #lines[#lines],
+      right_gravity = true,
+      end_right_gravity = false,
+    }),
+    turns = turns,
+    ctx = self.ctx,
+    mode = self.mode,
+    seen = lines,
+    expires = vim.uv.now() + RESUME_MS,
+  }
+end
+
 function Session:accept()
   if self.state ~= "review" then
     return
@@ -612,6 +691,7 @@ function Session:accept()
   end
   vim.api.nvim_buf_set_lines(buf, r0, r1 + 1, false, lines)
   if #lines > 0 then
+    self:remember(r0, r0 + #lines - 1, lines)
     vim.hl.range(buf, flash_ns, "LeaderKFlash", { r0, 0 }, { r0 + #lines - 1, 0 }, {
       regtype = "V",
       timeout = 300,
@@ -718,6 +798,14 @@ function M.start(r0, r1, instruction, opts)
     vim.api.nvim_echo({ { "leader-k: " .. config_err } }, true, { err = true })
     return
   end
+  local resume
+  if not (opts and opts.focus) then
+    local q0, q1
+    resume, q0, q1 = resumable(buf, r0, r1, mode)
+    if resume then
+      r0, r1 = assert(q0), assert(q1)
+    end
+  end
 
   local self = setmetatable({
     buf = buf,
@@ -734,6 +822,7 @@ function M.start(r0, r1, instruction, opts)
     busy = false,
     reserve = 0,
     reveal = false,
+    resumed = resume ~= nil,
     filetype = vim.bo[buf].filetype,
   }, Session)
   self:set_region(r0, r1)
@@ -791,9 +880,18 @@ function M.start(r0, r1, instruction, opts)
     -- Read the selection again in case it changed while typing.
     local r0_, r1_ = render.region(self)
     self.original = vim.api.nvim_buf_get_lines(buf, r0_, r1_ + 1, false)
-    self.seen = self.original
-    self:build_context()
-    self.turns = { { instruction = text } }
+    if resume then
+      local turn = { instruction = text }
+      self.ctx, self.turns, self.seen = resume.ctx, vim.deepcopy(resume.turns), resume.seen
+      if not same_lines(self.original, self.seen) then
+        self.seen, turn.selection = self.original, self.original
+      end
+      table.insert(self.turns, turn)
+    else
+      self.seen = self.original
+      self:build_context()
+      self.turns = { { instruction = text } }
+    end
     self:send()
   end
 
@@ -809,7 +907,10 @@ function M.start(r0, r1, instruction, opts)
   self.reserve = 0
   local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
   local title, placeholder
-  if mode == "ask" then
+  if resume then
+    title = "Follow up"
+    placeholder = ({ auto = "Ask, or describe a change.", edit = "What should change?", ask = "Ask a follow-up." })[mode]
+  elseif mode == "ask" then
     title, placeholder = "Ask about " .. where, "Ask a question."
   elseif mode == "auto" then
     title, placeholder = where:gsub("^%l", string.upper), "Ask, or describe a change."

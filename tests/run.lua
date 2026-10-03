@@ -768,6 +768,37 @@ test("an edit asked for under an answer starts from the current lines", function
   eq(buf_lines()[3], "local function total(items)")
 end)
 
+test("asking again on lines just accepted resumes the conversation", function()
+  use("fast")
+  lines(SAMPLE)
+  lk.run(3, 9, "use ipairs")
+  local s = assert(session.get(0))
+  wait_state(s, "review")
+  s:accept()
+  eq(vim.fn.line("."), 3, "cursor on the new code")
+
+  local buf = vim.api.nvim_get_current_buf()
+  lk.open()
+  local r = assert(session.get(buf))
+  eq(r.state, "prompt")
+  eq({ render.region(r) }, { 2, 8 }, "the accepted lines, not just the cursor line")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "add a doc comment" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  wait_state(r, "review")
+  local msgs = last_request().body.messages
+  eq(#msgs, 4)
+  truthy(msgs[3].content:find("<code>\nlocal function total", 1, true), msgs[3].content)
+  truthy(msgs[4].content:find("applied your proposal", 1, true), msgs[4].content)
+  truthy(msgs[4].content:find("Request: add a doc comment", 1, true), msgs[4].content)
+  r:destroy()
+
+  vim.cmd("normal! 1G")
+  lk.open()
+  r = assert(session.get(buf))
+  eq(#r.turns, 0, "other lines start a new conversation")
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "x", false)
+end)
+
 test("whole file is sent; large files are cut at whole lines", function()
   use("fast")
   local big = {}

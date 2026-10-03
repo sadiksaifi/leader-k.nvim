@@ -61,6 +61,7 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 ---@field proposal string[]|nil The proposed edit, once the reply was code.
 ---@field answer string|nil The Markdown answer, once the reply was an answer.
 ---@field selection string[]|nil The selected lines, when they changed since the model last saw them.
+---@field applied boolean|nil The user accepted this turn's proposal.
 
 -- How the user's text is introduced in each mode.
 local LABEL = { auto = "Request", edit = "Instruction", ask = "Question" }
@@ -136,27 +137,27 @@ local function follow_up(turn, prev, mode)
   local ask
   if mode == "ask" then
     ask = "Answer the follow-up about the same selection in <answer></answer> again."
-  elseif mode == "auto" and prev.answer then
+  elseif mode == "auto" and (prev.answer or prev.applied) then
     ask =
       "If this asks for a change, reply with the full new region for the same selection in <code></code>. Otherwise reply in <answer></answer>."
   elseif mode == "auto" then
     ask =
       "If this asks for a change, revise your replacement and reply with the full new region in <code></code> again. Otherwise reply in <answer></answer>."
-  elseif prev.answer then
+  elseif prev.answer or prev.applied then
     ask = "Reply with the full new region for the same selection in <code></code>."
   else
     ask = "Revise your replacement for the same selection. Reply with the full new region in <code></code> again."
   end
-  local out = { ask, "", LABEL[mode] .. ": " .. turn.instruction }
-  if turn.selection then
-    table.insert(out, 1, "")
-    table.insert(
-      out,
-      1,
-      "The selection now reads:\n<selection>\n" .. table.concat(turn.selection, "\n") .. "\n</selection>"
-    )
+  local out = {}
+  if prev.applied then
+    out[#out + 1] = "The user applied your proposal, so the selection now holds it."
   end
-  return table.concat(out, "\n")
+  if turn.selection then
+    out[#out + 1] = "The selection now reads:\n<selection>\n" .. table.concat(turn.selection, "\n") .. "\n</selection>"
+  end
+  out[#out + 1] = ask
+  out[#out + 1] = LABEL[mode] .. ": " .. turn.instruction
+  return table.concat(out, "\n\n")
 end
 
 ---@param ctx leader_k.Context

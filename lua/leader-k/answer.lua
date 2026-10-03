@@ -31,7 +31,7 @@ end
 local function transcript(s)
   local out, questions, latest = {}, {}, 0
   for i, turn in ipairs(s.turns) do
-    local text = turn.answer or (turn.proposal and "*Proposed an edit.*")
+    local text = turn.answer or (turn.applied and "*Applied an edit.*") or (turn.proposal and "*Proposed an edit.*")
     if i == #s.turns and s.state == "running" then
       text = s.answer_text
     end
