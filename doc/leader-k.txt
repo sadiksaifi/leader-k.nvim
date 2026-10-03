@@ -15,16 +15,18 @@ Enter. The model decides how to reply:
 
   A change      A proposed edit, shown inline as a diff. Accepting applies
                 it to the buffer.
-  A question    A Markdown answer in a float under the selection, or above
-                it when there is no room below. The buffer is not changed.
+  A question    A Markdown answer in a panel on the right. The buffer is
+                not changed.
 
 During review: Enter accepts, Backspace rejects, <leader>k follows up, and
 <C-c> stops a running request. A changed selection cannot be accepted until
 that edit is undone. Errors appear in |:messages|.
 
-While an answer is shown: Backspace closes it, <leader>k follows up, and
-<C-w>w moves into the float. In the float, q or Esc closes the answer and
-<leader>k follows up. Focus stays in the code until you move it.
+While an answer is shown: Backspace closes it and <leader>k follows up.
+Focus stays in the code; move into the panel with the usual window commands,
+such as <C-w>l. In the panel, q closes the answer and <leader>k follows up.
+Closing the panel window also closes the answer. The panel stays open
+through follow-ups that propose edits, until the session ends.
 
 Follow-ups continue one conversation and can switch between edits and
 answers. Enter alone on a follow-up regenerates the last reply. After you
@@ -105,14 +107,13 @@ KEYS                                                        *leader-k-keys*
   keys.cancel  <C-c>      Stop a request. A refine returns to its proposal.
   keys.refine  <leader>k  Follow up on a proposal or answer; empty input
                           regenerates the last reply.
-  keys.focus   <C-w>w     Move into the answer float while it is on screen.
 
 Outside their session, or off screen, the keys keep their usual meaning.
 
 In the prompt: Enter sends; Up/Down recall requests; <C-c> cancels.
 Esc enters Normal mode, where Esc or q cancels.
 
-In the answer float: q or Esc closes the answer, keys.refine follows up, and
+In the answer panel: q closes the answer, keys.refine follows up, and
 keys.cancel stops a running request.
 
 ==============================================================================
@@ -143,7 +144,6 @@ Edits replace whole lines. One session runs per buffer; sessions in other
 buffers can run in parallel. Request context comes from the current file.
 Tree-sitter syntax colors on proposed lines require a parser for the
 filetype. Answers use the bundled Markdown parser; colors in their code
-blocks require a parser for the block's language. Floats show their title
-and footer only with a border; see 'winborder'.
+blocks require a parser for the block's language.
 
  vim:tw=78:ts=8:ft=help:norl:

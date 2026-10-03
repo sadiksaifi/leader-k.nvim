@@ -5,7 +5,6 @@ local M = {}
 ---@field reject string
 ---@field cancel string
 ---@field refine string
----@field focus string
 
 ---@class leader_k.EnvKey
 ---@field env string Name of an environment variable inherited by Neovim.
@@ -32,7 +31,6 @@ M.defaults = {
     reject = "<BS>",
     cancel = "<C-c>",
     refine = "<leader>k",
-    focus = "<C-w>w",
   },
 }
 
@@ -91,7 +89,7 @@ function M.endpoint()
   if type(o.keys) ~= "table" then
     return nil, "`keys` must be a table of mappings"
   end
-  for _, action in ipairs({ "accept", "reject", "cancel", "refine", "focus" }) do
+  for _, action in ipairs({ "accept", "reject", "cancel", "refine" }) do
     if type(o.keys[action]) ~= "string" or o.keys[action] == "" then
       return nil, ("`keys.%s` must be a nonempty string"):format(action)
     end

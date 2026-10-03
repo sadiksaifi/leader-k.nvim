@@ -389,17 +389,6 @@ function Session:install_maps()
       return self.state == "review" or self.state == "answered"
     end
   )
-  map(
-    keys.focus,
-    function()
-      vim.api.nvim_set_current_win(self.answer_win)
-    end,
-    "focus the answer",
-    function()
-      local win = self.answer_win
-      return win ~= nil and vim.api.nvim_win_is_valid(win) and not vim.api.nvim_win_get_config(win).hide
-    end
-  )
 end
 
 function Session:restore_maps()
@@ -857,7 +846,6 @@ function M.start(r0, r1, instruction, opts)
     buffer = buf,
     callback = function()
       self:check_stale()
-      answer.sync(self)
     end,
   })
   vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
@@ -865,14 +853,6 @@ function M.start(r0, r1, instruction, opts)
     buffer = buf,
     callback = function()
       self:destroy()
-    end,
-  })
-  vim.api.nvim_create_autocmd("WinScrolled", {
-    group = self.augroup,
-    callback = function(ev)
-      if tonumber(ev.match) ~= self.answer_win then
-        answer.sync(self)
-      end
     end,
   })
   vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {

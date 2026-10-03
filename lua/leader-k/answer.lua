@@ -1,17 +1,14 @@
--- The answer view: a Markdown transcript of a session's answers, in a float
--- docked under the selection. Focus stays in the code until the user moves it.
+-- The answer panel: a Markdown transcript of a session's answers, in a split
+-- on the right of the editor. Focus stays in the code until the user moves it.
 
 local config = require("leader-k.config")
-local input = require("leader-k.input")
 local render = require("leader-k.render")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("leader-k.answer")
-local MAX_WIDTH = 88
--- Below or above the selection only when this many rows fit there; else at
--- the window bottom.
-local MIN_ROWS = 5
+local MAX_WIDTH = 80
+local MIN_WIDTH = 30
 
 ---@param s leader_k.Session
 ---@return integer|nil
@@ -34,7 +31,7 @@ local function transcript(s)
   for i, turn in ipairs(s.turns) do
     local text = turn.answer or (turn.applied and "*Applied an edit.*") or (turn.proposal and "*Proposed an edit.*")
     if i == #s.turns and s.state == "running" then
-      text = s.answer_text
+      text = s.answer_text or "*Waiting for the reply.*"
     end
     if text then
       if #out > 0 then
@@ -65,11 +62,9 @@ local function create_buf(s)
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  local function close()
+  map("q", function()
     s:destroy()
-  end
-  map("q", close)
-  map("<Esc>", close)
+  end)
   map(keys.refine, function()
     s:refine()
   end)
@@ -79,6 +74,53 @@ local function create_buf(s)
     end
   end)
   return buf
+end
+
+---@param text string
+local function escape(text)
+  return (text:gsub("%%", "%%%%"))
+end
+
+---@param s leader_k.Session
+local function winbar(s)
+  local keys = config.options.keys
+  local function hint(lhs, label)
+    return ("%%#LeaderKKey#%s%%#LeaderKHint# %s"):format(escape(render.key_label(lhs)), label)
+  end
+  return (" %%#LeaderKQuestion#Answer%%#LeaderKFooter#  %s%%=%s  %s "):format(
+    escape(s.model_label or ""),
+    hint("q", "close"),
+    hint(keys.refine, "follow up")
+  )
+end
+
+---@param s leader_k.Session
+---@param buf integer
+local function open_win(s, buf)
+  local width = math.max(MIN_WIDTH, math.min(MAX_WIDTH, math.floor(vim.o.columns * 0.4)))
+  local win = vim.api.nvim_open_win(buf, false, { split = "right", win = -1, width = width })
+  local wo = vim.wo[win]
+  wo.wrap, wo.linebreak, wo.breakindent = true, true, true
+  wo.conceallevel, wo.concealcursor = 2, "nc"
+  wo.number, wo.relativenumber, wo.signcolumn, wo.foldcolumn = false, false, "no", "0"
+  wo.cursorline, wo.spell, wo.list, wo.fillchars = false, false, false, "eob: "
+  wo.winfixwidth, wo.winfixbuf = true, true
+  -- Closing the panel ends a conversation that has nothing else on screen.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = s.augroup,
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if s.answer_win ~= win then
+        return
+      end
+      s.answer_win, s.answer_buf, s.answer_lines, s.answer_shown = nil, nil, nil, nil
+      if s.state == "answered" or (s.state == "running" and s.answer_text) then
+        s:destroy()
+      end
+    end,
+  })
+  return win
 end
 
 ---@param s leader_k.Session
@@ -92,7 +134,8 @@ function M.close(s)
         vim.api.nvim_set_current_win(code)
       end
     end
-    vim.api.nvim_win_close(win, true)
+    -- The last window cannot be closed; the buffer then stays until replaced.
+    pcall(vim.api.nvim_win_close, win, true)
   end
 end
 
@@ -102,13 +145,13 @@ function M.focused(s)
   return s.answer_win ~= nil and vim.api.nvim_get_current_win() == s.answer_win
 end
 
----Opens, updates, moves, or closes the float to match the session.
+---Opens or updates the panel to match the session. Once open, it stays for
+---the rest of the session, through turns that propose edits.
 ---@param s leader_k.Session
 function M.sync(s)
-  local show = s.state == "answered" or (s.state == "running" and s.answer_text ~= nil)
-  local win = show and vim.api.nvim_buf_is_valid(s.buf) and code_window(s)
-  if not win then
-    M.close(s)
+  local awin = s.answer_win
+  local open = awin ~= nil and vim.api.nvim_win_is_valid(awin)
+  if not open and not (s.state == "answered" or (s.state == "running" and s.answer_text ~= nil)) then
     return
   end
 
@@ -133,86 +176,32 @@ function M.sync(s)
     end
   end
 
-  local info = vim.fn.getwininfo(win)[1]
-  local indent = s.indent_width
-  if indent >= info.width - info.textoff - 30 then
-    indent = 0
-  end
-  local width = math.max(math.min(info.width - info.textoff - indent - 2, MAX_WIDTH), math.min(30, info.width - 2))
-  local cfg = {
-    relative = "win",
-    win = win,
-    row = 0,
-    col = info.textoff + math.max(indent - 1, 0),
-    width = width,
-    height = 1,
-    hide = true,
-    title = " Answer ",
-    title_pos = "left",
-    footer = " " .. (s.model_label or "") .. " ",
-    footer_pos = "right",
-    zindex = 50,
-  }
-  local awin = s.answer_win
-  if not (awin and vim.api.nvim_win_is_valid(awin)) then
-    cfg.style = "minimal"
-    awin = vim.api.nvim_open_win(abuf, false, cfg)
+  if not open then
+    awin = open_win(s, abuf)
     s.answer_win = awin
-    local wo = vim.wo[awin]
-    wo.wrap, wo.linebreak, wo.breakindent = true, true, true
-    wo.conceallevel, wo.concealcursor = 2, "nc"
-    wo.winhighlight = "FloatFooter:LeaderKFooter"
-  else
-    vim.api.nvim_win_set_config(awin, cfg)
+  end
+  local bar = winbar(s)
+  if vim.wo[awin].winbar ~= bar then
+    vim.wo[awin].winbar = bar
   end
 
-  -- Hidden while the selection is scrolled out of view.
-  local r0, r1 = render.region(s)
-  local top, bot = vim.fn.line("w0", win) - 1, vim.fn.line("w$", win) - 1
-  if r1 < top or r0 > bot then
-    return
-  end
-  local border = input.border_rows(awin)
-  local max_h = math.max(3, math.floor(info.height * 0.4))
-  -- Sized to the latest turn, which the view shows; earlier turns are above.
-  local want = math.min(vim.api.nvim_win_text_height(awin, { start_row = latest, max_height = max_h }).all, max_h)
-  local row, height
-  if r1 <= bot then
-    local at = vim.fn.screenpos(win, r1 + 1, 1).row - info.winrow
-    -- Rows of the last line itself, without virtual lines above it.
-    local tall = vim.api.nvim_win_text_height(win, { start_row = r1, start_vcol = 0, end_row = r1 }).all
-    local below = info.height - at - tall - border
-    if below >= math.min(want, MIN_ROWS) then
-      row, height = at + tall, math.min(want, below)
-    end
-  end
-  if not row and r0 >= top then
-    -- Above the selection and its header, which stay in view.
-    local at = vim.fn.screenpos(win, r0 + 1, 1).row - info.winrow
-    local virt = vim.api.nvim_win_text_height(win, { start_row = r0, end_row = r0, end_vcol = 0 }).all
-    local above = at - virt - border
-    if above >= math.min(want, MIN_ROWS) then
-      height = math.min(want, above)
-      row = at - virt - height - border
-    end
-  end
-  if not row then
-    height = math.max(1, math.min(want, info.height - border))
-    row = math.max(0, info.height - height - border)
-  end
-  cfg.row, cfg.height, cfg.hide = row, height, false
-  vim.api.nvim_win_set_config(awin, cfg)
-
-  -- Follow the stream, then show the latest turn from its question, unless
-  -- the user is reading in the float.
+  -- Follow the stream, then show the latest turn from its question, with
+  -- earlier turns above it when they fit, unless the user is reading in the
+  -- panel.
   if not M.focused(s) then
     if s.state == "running" then
       vim.api.nvim_win_set_cursor(awin, { #lines, 0 })
     elseif s.answer_shown ~= #s.turns then
       s.answer_shown = #s.turns
-      vim.api.nvim_win_set_cursor(awin, { latest + 1, 0 })
+      local rest = vim.api.nvim_win_text_height(awin, { start_row = latest }).all
       vim.api.nvim_win_call(awin, function()
-        vim.fn.winrestview({ topline = latest + 1 })
+        if rest <= vim.api.nvim_win_get_height(awin) then
+          vim.api.nvim_win_set_cursor(awin, { #lines, 0 })
+          vim.cmd("normal! zb")
+        else
+          vim.api.nvim_win_set_cursor(awin, { latest + 1, 0 })
+          vim.fn.winrestview({ topline = latest + 1 })
+        end
       end)
     end
   end

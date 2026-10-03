@@ -537,7 +537,7 @@ local function last_request()
   return vim.json.decode(table.concat(vim.fn.readfile(LOG), "\n"))
 end
 
----@return string text of the answer float, or nil when it is closed.
+---@return string text of the answer panel, or nil when it is closed.
 local function answer_text(s)
   local win = s.answer_win
   if not (win and vim.api.nvim_win_is_valid(win)) then
@@ -546,7 +546,13 @@ local function answer_text(s)
   return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false), "\n")
 end
 
-test("ask streams a Markdown answer into a float and leaves the code alone", function()
+local function follow_up(s, text)
+  s:refine()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { text })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+end
+
+test("ask streams a Markdown answer into a panel and leaves the code alone", function()
   use("answer_slow")
   vim.bo.filetype = "lua"
   lines(SAMPLE)
@@ -558,7 +564,7 @@ test("ask streams a Markdown answer into a float and leaves the code alone", fun
     streamed = streamed or (s.state == "running" and answer_text(s) ~= nil)
     return s.state ~= "running"
   end, 5)
-  truthy(streamed, "the float opened while the answer streamed")
+  truthy(streamed, "the panel opened while the answer streamed")
   eq(s.state, "answered")
   local text = assert(answer_text(s))
   truthy(text:find("why multiply?", 1, true), "question shown: " .. text)
@@ -603,7 +609,7 @@ test("closing an answer leaves nothing behind", function()
   vim.cmd("normal! 3G")
   vim.api.nvim_feedkeys(vim.keycode("<BS>"), "x", false)
   eq(session.get(0), nil, "Backspace closes the answer")
-  eq(answer_text(s), nil, "float closed")
+  eq(answer_text(s), nil, "panel closed")
   eq(#marks(), 0)
 
   lk.run(3, 9, "why?", { mode = "ask" })
@@ -612,29 +618,40 @@ test("closing an answer leaves nothing behind", function()
   local code_win = vim.api.nvim_get_current_win()
   vim.api.nvim_set_current_win(s.answer_win)
   vim.api.nvim_feedkeys("q", "x", false)
-  eq(session.get(0), nil, "q in the float closes the answer")
+  eq(session.get(0), nil, "q in the panel closes the answer")
   eq(vim.api.nvim_get_current_win(), code_win, "focus returns to the code")
   eq(#marks(), 0)
 end)
 
-test("Ctrl-w w moves into the answer while it is on screen", function()
+test("the answer is a split on the right; closing it ends the answer", function()
   use("answer")
   lines(SAMPLE)
-  -- The code is in the first window, so the built-in goes to the second.
-  local other = vim.api.nvim_get_current_win()
-  vim.cmd("vsplit")
   local code_win = vim.api.nvim_get_current_win()
   lk.run(3, 9, "why?", { mode = "ask" })
   local s = assert(session.get(0))
   wait_state(s, "answered")
-  vim.cmd("normal! 3G")
-  vim.api.nvim_feedkeys(vim.keycode("<C-w>w"), "x", false)
-  eq(vim.api.nvim_get_current_win(), s.answer_win, "focus moved into the answer")
-  vim.api.nvim_set_current_win(code_win)
-  s:destroy()
-  vim.api.nvim_feedkeys(vim.keycode("<C-w>w"), "x", false)
-  eq(vim.api.nvim_get_current_win(), other, "without an answer, Ctrl-w w is the built-in")
-  vim.cmd("only")
+  local win = assert(s.answer_win)
+  eq(vim.api.nvim_win_get_config(win).relative, "", "a split, not a float")
+  eq(vim.fn.winlayout(), { "row", { { "leaf", code_win }, { "leaf", win } } })
+  truthy(vim.wo[win].winbar:find("Answer", 1, true), vim.wo[win].winbar)
+  vim.api.nvim_win_close(win, true)
+  eq(session.get(0), nil, "closing the panel closes the answer")
+  eq(#marks(), 0)
+end)
+
+test("closing the panel during review keeps the proposal", function()
+  use("route")
+  lines(SAMPLE)
+  lk.run(3, 9, "why?")
+  local s = assert(session.get(0))
+  wait_state(s, "answered")
+  follow_up(s, "change it to ipairs")
+  wait_state(s, "review")
+  vim.api.nvim_win_close(assert(s.answer_win), true)
+  eq(session.get(0), s, "the proposal stays")
+  eq(s.answer_win, nil)
+  s:accept()
+  eq(buf_lines()[3], "local function total(items)")
 end)
 
 test("stopping an answer closes it", function()
@@ -728,12 +745,6 @@ test("a characterwise selection sends its exact text and highlights only it", fu
   truthy(user:find("<highlight>\n" .. word .. "\n</highlight>", 1, true), user)
 end)
 
-local function follow_up(s, text)
-  s:refine()
-  vim.api.nvim_buf_set_lines(0, 0, -1, false, { text })
-  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
-end
-
 test("follow-ups keep one conversation across answers and edits", function()
   use("route")
   lines(SAMPLE)
@@ -753,7 +764,7 @@ test("follow-ups keep one conversation across answers and edits", function()
   follow_up(s, "change it to ipairs")
   wait_state(s, "review")
   eq(s.proposal[1], "local function total(items)")
-  eq(answer_text(s), nil, "the answer gives way to the proposal")
+  truthy(assert(answer_text(s)):find("› change it to ipairs\n*Proposed an edit.*", 1, true), "the panel stays")
   eq(#last_request().body.messages, 6)
 
   follow_up(s, "why that?")

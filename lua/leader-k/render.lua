@@ -262,7 +262,6 @@ local function header(s, now, width)
     add("  ", "")
     hint(o.keys.reject, "close")
     hint(o.keys.refine, "follow up")
-    hint(o.keys.focus, "focus")
   elseif s.state == "review" then
     if s.stale then
       add("Selection edited after the request.", "LeaderKWarn")

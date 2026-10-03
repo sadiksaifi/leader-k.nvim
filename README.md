@@ -90,7 +90,7 @@ request. The model decides how to reply:
 - A change, such as "use ipairs", comes back as a proposed edit shown inline
   as a diff. Nothing changes until you accept it.
 - A question, such as "why multiply here?", comes back as a Markdown answer in
-  a float under the selection. The buffer is never changed.
+  a panel on the right. The buffer is never changed.
 
 Follow-ups continue the same conversation and can switch between the two:
 ask "why is this slow?", then "fix it". Asking again on lines you just
@@ -108,8 +108,7 @@ the lines they are on, so you can ask about a single expression.
 | Review | `<CR>` | Accept proposal |
 | Review / answer / request | `<BS>` | Reject proposal / close answer / stop request |
 | Review / answer | `<leader>k` | Follow up |
-| Answer | `<C-w>w` | Move into the answer float |
-| Answer float | `q` / `<Esc>` | Close the answer |
+| Answer panel | `q` | Close the answer |
 | Request | `<C-c>` | Stop request |
 
 To always get one kind of reply, map the mode explicitly:
