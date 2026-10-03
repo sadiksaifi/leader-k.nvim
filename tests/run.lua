@@ -643,7 +643,7 @@ test("the answer is a split on the right; closing it ends the answer", function(
   for _, m in ipairs(marks()) do
     header = header or m[4].virt_lines_above == true
   end
-  eq(header, false, "no header in the code while the panel shows the answer")
+  eq(header, false, "no header in the code")
   vim.api.nvim_win_close(iwin, true)
   eq(session.get(0), nil, "closing the input closes the answer")
   eq(vim.api.nvim_win_is_valid(win), false, "and the transcript")
@@ -691,12 +691,22 @@ test("follow-ups are typed in the panel; an edit moves focus to the code", funct
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
   wait_state(s, "review")
   eq(vim.api.nvim_get_current_win(), code_win, "a proposal is reviewed in the code")
-  truthy(vim.wo[s.input_win].winbar:find("Review it in the code", 1, true), vim.wo[s.input_win].winbar)
+  local bar = vim.wo[s.input_win].winbar
+  truthy(bar:find("%#LeaderKCountAdd#+3%#LeaderKDivider#%#LeaderKCountDelete# -3", 1, true), bar)
+  truthy(bar:find("Review it in the code", 1, true), bar)
+  local hints = vim.wo[s.input_win].statusline
+  truthy(hints:find("Enter%#LeaderKHint# accept", 1, true), hints)
+  truthy(hints:find("Leader k%#LeaderKHint# refine", 1, true), hints)
   local header = false
   for _, m in ipairs(marks()) do
     header = header or m[4].virt_lines_above == true
   end
-  truthy(header, "the code shows the review header")
+  eq(header, false, "the review status and keys are in the panel, not the code")
+  s:refine()
+  vim.wait(20)
+  hints = vim.wo[s.input_win].statusline
+  truthy(hints:find("Enter%#LeaderKHint# send", 1, true), "the input's own keys while it is focused: " .. hints)
+  vim.cmd.stopinsert()
   s:accept()
   eq(vim.api.nvim_win_is_valid(code_win), true)
   eq(#vim.api.nvim_list_wins(), 1, "accepting closes the panel")
@@ -1168,15 +1178,6 @@ test("a failed follow-up keeps the new selection attached", function()
   eq(#s.turns, 1)
   eq({ s.buf, render.region(s) }, { a, 2, 8 }, "edits target the first selection again")
   eq(chip(s), { "Attached: line 11 of [unnamed buffer]", "LeaderKNote" })
-end)
-
-test("header is revealed for a selection on the first line", function()
-  use("fast")
-  lines(SAMPLE)
-  edit(1, 1, "x")
-  local s = assert(session.get(0))
-  wait_state(s, "review")
-  truthy(vim.fn.winsaveview().topfill >= 1, "topfill shows the header")
 end)
 
 test("diagnostics in the selection are sent", function()

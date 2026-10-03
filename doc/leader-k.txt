@@ -18,13 +18,16 @@ Type a request and press Enter. The model decides how to reply:
                 it to the buffer.
   A question    A Markdown answer in the panel. The buffer is not changed.
 
-The panel holds the conversation. Its transcript sits above the input, and
-a dim divider above the input shows the status. The code keeps the
-selection marked; it shows a header and a diff only when a reply proposes
-an edit, and focus then moves to the code for review.
+The panel holds the conversation. Its transcript sits above the input. A
+dim divider above the input shows the status, such as "+3 -3 Review it in
+the code.", and a row under the input shows the keys. The code keeps the
+selection marked and shows a diff when a reply proposes an edit; focus
+then moves to the code for review.
 
 During review: Enter accepts, Backspace rejects, <leader>k moves into the
-panel input to refine, and <C-c> stops a running request. A changed
+panel input to refine, and <C-c> stops a running request. These keys work
+in the code; the row under the input lists them while the input is not
+focused. A changed
 selection cannot be accepted until that edit is undone. Errors appear in
 |:messages|.
 
@@ -150,7 +153,7 @@ HIGHLIGHTS                                             *leader-k-highlights*
 
   LeaderKAdd  LeaderKAddText  LeaderKDelete  LeaderKDeleteText
   LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
-  LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
+  LeaderKSpinner  LeaderKKey  LeaderKHint
   LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
   LeaderKPlaceholder  LeaderKFlash  LeaderKFocus
 

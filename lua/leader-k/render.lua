@@ -10,7 +10,6 @@ local BAR = "▎"
 
 ---@param lhs string
 local function key_label(lhs)
-  local leader = vim.g.mapleader
   local named = {
     ["<cr>"] = "Enter",
     ["<bs>"] = "Backspace",
@@ -29,8 +28,7 @@ local function key_label(lhs)
     return "Ctrl-" .. ctrl .. (rest ~= "" and " " .. rest or "")
   end
   if lower:find("^<leader>") then
-    local l = (leader == nil or leader == " ") and "Space" or leader
-    return l .. " " .. lhs:sub(#"<leader>" + 1)
+    return "Leader " .. lhs:sub(#"<leader>" + 1)
   end
   return lhs
 end
@@ -236,63 +234,6 @@ function M.progress(s, now)
 end
 
 ---@param s leader_k.Session
----@param now integer
----@param width integer Text area width of the window.
----@return string[][] header chunks
-local function header(s, now, width)
-  local o = require("leader-k.config").options
-  local ind = string.rep(" ", s.indent_width)
-  local chunks = { { ind, "" } }
-  local function add(text, group)
-    chunks[#chunks + 1] = { text, group }
-  end
-  local function hint(lhs, label)
-    add("  " .. key_label(lhs), "LeaderKKey")
-    add(" " .. label, "LeaderKHint")
-  end
-  local instruction = s.instruction or ""
-  if vim.fn.strchars(instruction) > 60 then
-    instruction = vim.fn.strcharpart(instruction, 0, 59) .. "…"
-  end
-
-  if s.state == "running" then
-    local frame, text = M.progress(s, now)
-    add(frame .. " ", "LeaderKSpinner")
-    add(text, "LeaderKStatus")
-    if instruction ~= "" then
-      add("  " .. instruction, "LeaderKInstruction")
-    end
-    add("  ", "")
-    hint(o.keys.cancel, "stop")
-  elseif s.state == "review" then
-    if s.stale then
-      add("Selection edited after the request.", "LeaderKWarn")
-      add(" Undo to restore it, or", "LeaderKHint")
-      hint(o.keys.reject, "discard")
-    elseif s.added == 0 and s.removed == 0 then
-      add("No changes", "LeaderKStatus")
-      if instruction ~= "" then
-        add("  " .. instruction, "LeaderKInstruction")
-      end
-      add("  ", "")
-      hint(o.keys.reject, "close")
-      hint(o.keys.refine, "refine")
-    else
-      add("+" .. s.added, "LeaderKCountAdd")
-      add(" -" .. s.removed, "LeaderKCountDelete")
-      if instruction ~= "" then
-        add("  " .. instruction, "LeaderKInstruction")
-      end
-      add("  ", "")
-      hint(o.keys.accept, "accept")
-      hint(o.keys.reject, "reject")
-      hint(o.keys.refine, "refine")
-    end
-  end
-  return chunks
-end
-
----@param s leader_k.Session
 ---@return integer r0, integer r1 0-based rows, inclusive.
 function M.region(s)
   local m = vim.api.nvim_buf_get_extmark_by_id(s.buf, s.mark_ns, s.mark, { details = true })
@@ -321,8 +262,6 @@ function M.draw(s)
   if r1 < r0 then
     return
   end
-  local now = vim.uv.now()
-
   local win_width = text_width(buf)
   local width = win_width + 200
   local above, below = {}, {} ---@type table<integer, table[]>, table<integer, table[]>
@@ -354,13 +293,9 @@ function M.draw(s)
     end
   else
     -- Keep the question's subject in sight; a proposal shows its own diff.
+    -- The panel shows the status and the keys.
     if s.state == "answered" or (s.state == "running" and not s.proposal) then
       mark_focus("LeaderKFocus")
-    end
-    -- The panel shows the conversation's status; the code shows a header
-    -- only for a proposal to accept or reject.
-    if s.state == "review" then
-      push(above, r0, header(s, now, win_width))
     end
     for row = r0, r1 do
       line_marks[row] = "bar"

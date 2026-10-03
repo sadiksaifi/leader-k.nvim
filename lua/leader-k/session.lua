@@ -114,7 +114,7 @@ end
 ---@field augroup integer
 ---@field busy boolean
 ---@field resumed boolean Continues a conversation whose proposal was accepted.
----@field reveal boolean Scroll the header into view on the next draw.
+---@field reveal boolean Scroll virtual lines above the selection into view on the next draw.
 ---@field spans_for string[]|nil Proposal the cached syntax spans belong to.
 ---@field spans table|nil
 local Session = {}

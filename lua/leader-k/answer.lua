@@ -117,27 +117,61 @@ end
 ---@param s leader_k.Session
 ---@param width integer
 local function divider(s, width)
-  local spin, left, right
+  local left, right ---@type string[][], string
   if s.state == "running" then
     local frame, text = render.progress(s, vim.uv.now())
-    spin, left = frame .. " ", text
+    left = { { frame .. " ", "LeaderKSpinner" }, { text } }
     right = render.key_label(config.options.keys.cancel) .. " stop"
+  elseif s.state == "review" and s.stale then
+    left = { { "Selection edited after the request. Undo to accept.", "LeaderKWarn" } }
+  elseif s.state == "review" and s.added == 0 and s.removed == 0 then
+    left = { { "No changes" } }
+  elseif s.state == "review" then
+    left = {
+      { "+" .. s.added, "LeaderKCountAdd" },
+      { " -" .. s.removed, "LeaderKCountDelete" },
+      { "  Review it in the code." },
+    }
   else
-    left = s.state == "review" and "Proposed an edit. Review it in the code." or (s.model_label or "")
-    right = "q close"
+    left = { { s.model_label or "" } }
   end
-  local used = 4 + vim.fn.strdisplaywidth((spin or "") .. left)
+  right = right or "q close"
+  local used, out = 4, { "── " }
+  for _, c in ipairs(left) do
+    used = used + vim.fn.strdisplaywidth(c[1])
+    out[#out + 1] = c[2] and ("%#" .. c[2] .. "#" .. escape(c[1]) .. "%#LeaderKDivider#") or escape(c[1])
+  end
   local fill = width - used - vim.fn.strdisplaywidth(right) - 4
   if fill < 1 then
     right, fill = "", math.max(width - used, 0)
   end
-  return ("── %s%s %s%s%s"):format(
-    spin and ("%#LeaderKSpinner#" .. spin .. "%#LeaderKDivider#") or "",
-    escape(left),
-    string.rep("─", fill),
-    right ~= "" and (" " .. escape(right) .. " ") or "",
-    right ~= "" and "──" or ""
-  )
+  out[#out + 1] = " " .. string.rep("─", fill)
+  if right ~= "" then
+    out[#out + 1] = " " .. escape(right) .. " ──"
+  end
+  return table.concat(out)
+end
+
+---The row of key hints under the input: the review keys while a proposal
+---waits in the code, the input's own keys otherwise.
+---@param s leader_k.Session
+---@param focused boolean The input has focus.
+local function hints(s, focused)
+  local keys = config.options.keys
+  local list
+  if s.state == "review" and not focused then
+    if s.stale then
+      list = { hint(keys.reject, "discard") }
+    elseif s.added == 0 and s.removed == 0 then
+      list = { hint(keys.reject, "close") }
+    else
+      list = { hint(keys.accept, "accept"), hint(keys.reject, "reject") }
+    end
+    list[#list + 1] = hint(keys.refine, "refine")
+  else
+    list = { hint("<CR>", "send"), hint("<Up>", "history"), hint("<Esc>", "back to the code") }
+  end
+  return " " .. table.concat(list, "  ")
 end
 
 ---@param win integer
@@ -192,8 +226,9 @@ local function refresh_input(s)
     virt_lines_above = true,
   })
   vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, { virt_lines = pad })
+  local focused = vim.api.nvim_get_current_win() == win
+  set_wo(win, "statusline", hints(s, focused))
   if #lines == 1 and lines[1] == "" then
-    local focused = vim.api.nvim_get_current_win() == win
     local text
     if s.state == "prompt" then
       local resumed = #s.turns > 0
@@ -370,11 +405,6 @@ local function open_panel(s)
   vim.wo[awin].statusline = " "
   vim.wo[iwin].winhighlight =
     "WinBar:LeaderKDivider,WinBarNC:LeaderKDivider,StatusLine:LeaderKDivider,StatusLineNC:LeaderKDivider"
-  vim.wo[iwin].statusline = (" %s  %s  %s"):format(
-    hint("<CR>", "send"),
-    hint("<Up>", "history"),
-    hint("<Esc>", "back to the code")
-  )
   s.answer_win, s.input_win = awin, iwin
 end
 
