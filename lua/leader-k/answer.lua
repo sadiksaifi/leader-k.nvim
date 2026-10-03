@@ -9,7 +9,8 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("leader-k.answer")
 local MAX_WIDTH = 88
--- Below the selection only when this many rows fit; else at the window bottom.
+-- Below or above the selection only when this many rows fit there; else at
+-- the window bottom.
 local MIN_ROWS = 5
 
 ---@param s leader_k.Session
@@ -183,6 +184,16 @@ function M.sync(s)
     local below = info.height - at - tall - border
     if below >= math.min(want, MIN_ROWS) then
       row, height = at + tall, math.min(want, below)
+    end
+  end
+  if not row and r0 >= top then
+    -- Above the selection and its header, which stay in view.
+    local at = vim.fn.screenpos(win, r0 + 1, 1).row - info.winrow
+    local virt = vim.api.nvim_win_text_height(win, { start_row = r0, end_row = r0, end_vcol = 0 }).all
+    local above = at - virt - border
+    if above >= math.min(want, MIN_ROWS) then
+      height = math.min(want, above)
+      row = at - virt - height - border
     end
   end
   if not row then
