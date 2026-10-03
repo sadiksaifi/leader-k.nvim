@@ -320,8 +320,11 @@ local function create_input(s)
       if text ~= "" then
         input.remember(text)
       end
-      reset()
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+      -- A request that cannot start ends the session and wipes this buffer.
+      if vim.api.nvim_buf_is_valid(buf) then
+        reset()
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+      end
     end
   end)
   map({ "i", "n" }, config.options.keys.cancel, function()

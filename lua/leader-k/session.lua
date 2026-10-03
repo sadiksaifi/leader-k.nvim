@@ -50,8 +50,9 @@ end
 ---@param r0 integer
 ---@param r1 integer
 ---@param mode leader_k.Mode
+---@param selected boolean The rows were selected, not just the cursor line.
 ---@return leader_k.Recent|nil, integer|nil, integer|nil
-local function resumable(buf, r0, r1, mode)
+local function resumable(buf, r0, r1, mode, selected)
   local r = recent
   if not r or r.buf ~= buf then
     return nil
@@ -63,7 +64,7 @@ local function resumable(buf, r0, r1, mode)
   end
   local q0, q1 = m[1], math.max(m[1], m[3].end_row or m[1])
   -- The same lines, or the cursor line inside them in Normal mode.
-  local hit = (r0 == q0 and r1 == q1) or (r0 == r1 and r0 >= q0 and r0 <= q1)
+  local hit = (r0 == q0 and r1 == q1) or (not selected and r0 >= q0 and r0 <= q1)
   if not hit or r.mode ~= mode then
     return nil
   end
@@ -519,7 +520,10 @@ function Session:install_maps()
     return r1 >= top - 1 and r0 <= bot + 1
   end
   local function map(lhs, fn, desc, guard)
-    local prev = vim.fn.maparg(lhs, "n", false, true)
+    -- Requests are often sent from the panel input; read the code's map.
+    local prev = vim.api.nvim_buf_call(self.buf, function()
+      return vim.fn.maparg(lhs, "n", false, true)
+    end)
     if prev and prev.buffer == 1 then
       table.insert(self.saved_maps, prev)
     else
@@ -629,6 +633,7 @@ function Session:save_review()
     state = self.state,
     original = self.original,
     seen = self.seen,
+    ctx = self.ctx,
     turns = vim.deepcopy(self.turns),
     instruction = self.instruction,
     proposal = self.proposal,
@@ -669,10 +674,9 @@ function Session:restore_review()
       self.pending = self:target()
     end
     self:set_target(p.target)
-    self.ctx = p.ctx
     self:install_maps()
   end
-  self.turns, self.instruction = p.turns, p.instruction
+  self.turns, self.instruction, self.ctx = p.turns, p.instruction, p.ctx
   self.original, self.seen = p.original, p.seen
   self.proposal, self.hunks, self.added, self.removed = p.proposal, p.hunks, p.added, p.removed
   self.state, self.phase, self.answer_text = p.state, nil, nil
@@ -906,10 +910,20 @@ function Session:follow_up(text)
   end
   if text == "" then
     last.proposal, last.answer = nil, nil -- Regenerate the same turn.
+    if not same_lines(self.original, self.seen) then
+      -- The code changed since the model saw it; send it as it is now.
+      self.seen = self.original
+      if last.attach then
+        self:build_context()
+        last.attach = self.ctx
+      else
+        last.selection = self.original
+      end
+    end
   else
     local turn = { instruction = text }
     if self.pending then
-      self.prev.target, self.prev.ctx = self:target(), self.ctx
+      self.prev.target = self:target()
       local t = self.pending
       self.pending = nil
       self:set_target(t)
@@ -1001,7 +1015,7 @@ function M.start(r0, r1, instruction, opts)
   local resume
   if not opts.focus then
     local q0, q1
-    resume, q0, q1 = resumable(buf, r0, r1, mode)
+    resume, q0, q1 = resumable(buf, r0, r1, mode, opts.selection == true)
     if resume then
       r0, r1 = assert(q0), assert(q1)
     end
