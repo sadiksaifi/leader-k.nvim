@@ -1,6 +1,6 @@
 # leader-k.nvim
 
-Cursor-style inline edits for Neovim.
+Cursor-style inline edits and answers for Neovim.
 
 ![LeaderK Screenshot](https://github.com/user-attachments/assets/6ee69613-1d97-4cd9-aa9f-a45fa22579c4)
 
@@ -14,7 +14,7 @@ Cursor-style inline edits for Neovim.
 ```lua
 {
   "sadiksaifi/leader-k.nvim",
-  cmd = "LeaderK",
+  cmd = { "LeaderK", "LeaderKEdit", "LeaderKAsk" },
   keys = {
     { "<leader>k", function() require("leader-k").open() end, mode = { "n", "x" } },
   },
@@ -84,16 +84,41 @@ opts = {
 
 ## Use
 
+Select code, or put the cursor on a line, press `<leader>k`, and type a
+request. The model decides how to reply:
+
+- A change, such as "use ipairs", comes back as a proposed edit shown inline
+  as a diff. Nothing changes until you accept it.
+- A question, such as "why multiply here?", comes back as a Markdown answer in
+  a float under the selection. The buffer is never changed.
+
+Follow-ups continue the same conversation and can switch between the two:
+ask "why is this slow?", then "fix it". Asking again on lines you just
+accepted, within two minutes, continues that conversation too.
+
+A characterwise or blockwise selection sends the exact characters along with
+the lines they are on, so you can ask about a single expression.
+
 | Context | Key | Action |
 | --- | --- | --- |
-| Normal / Visual | `<leader>k` | Edit current line / selected lines |
-| Prompt | `<CR>` | Send instruction |
-| Prompt | `<Up>` / `<Down>` | Recall instructions |
+| Normal / Visual | `<leader>k` | Start on the current line / selection |
+| Prompt | `<CR>` | Send request |
+| Prompt | `<Up>` / `<Down>` | Recall requests |
 | Prompt | `<C-c>` | Cancel |
 | Review | `<CR>` | Accept proposal |
-| Review / request | `<BS>` | Reject proposal / stop request |
-| Review | `<leader>k` | Refine proposal |
+| Review / answer / request | `<BS>` | Reject proposal / close answer / stop request |
+| Review / answer | `<leader>k` | Follow up |
+| Answer | `<C-w>w` | Move into the answer float |
+| Answer float | `q` / `<Esc>` | Close the answer |
 | Request | `<C-c>` | Stop request |
 
-`:LeaderK` accepts a range and optional instruction. See `:help leader-k` for
-more keys. Run `:checkhealth leader-k` to inspect your setup.
+To always get one kind of reply, map the mode explicitly:
+
+```lua
+{ "<leader>e", function() require("leader-k").open({ mode = "edit" }) end, mode = { "n", "x" } },
+{ "<leader>a", function() require("leader-k").open({ mode = "ask" }) end, mode = { "n", "x" } },
+```
+
+`:LeaderK` (model decides), `:LeaderKEdit`, and `:LeaderKAsk` accept a range
+and an optional request. See `:help leader-k` for more keys. Run
+`:checkhealth leader-k` to inspect your setup.

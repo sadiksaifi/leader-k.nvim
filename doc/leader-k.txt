@@ -1,4 +1,4 @@
-*leader-k.txt*  Inline AI edits                                      *leader-k*
+*leader-k.txt*  Inline AI edits and answers                          *leader-k*
 
 ==============================================================================
 REQUIREMENTS                                        *leader-k-requirements*
@@ -9,17 +9,50 @@ REQUIREMENTS                                        *leader-k-requirements*
 ==============================================================================
 USE                                                          *leader-k-use*
 
-Map <leader>k to require("leader-k").open(). In Visual mode it edits the
-selected lines; in Normal mode it edits the current line. Enter submits the
-instruction. Accepting applies the proposal to the buffer.
+Map <leader>k to require("leader-k").open(). In Visual mode it starts on the
+selection; in Normal mode, on the current line. Type a request and press
+Enter. The model decides how to reply:
 
-During review: Enter accepts, Backspace rejects, <leader>k refines, and
+  A change      A proposed edit, shown inline as a diff. Accepting applies
+                it to the buffer.
+  A question    A Markdown answer in a float under the selection, or above
+                it when there is no room below. The buffer is not changed.
+
+During review: Enter accepts, Backspace rejects, <leader>k follows up, and
 <C-c> stops a running request. A changed selection cannot be accepted until
 that edit is undone. Errors appear in |:messages|.
 
+While an answer is shown: Backspace closes it, <leader>k follows up, and
+<C-w>w moves into the float. In the float, q or Esc closes the answer and
+<leader>k follows up. Focus stays in the code until you move it.
+
+Follow-ups continue one conversation and can switch between edits and
+answers. Enter alone on a follow-up regenerates the last reply. After you
+accept a proposal, starting again on the same lines, or in Normal mode on a
+line inside them, continues the conversation for two minutes.
+
+A characterwise or blockwise selection (|v| or |CTRL-V|) sends the lines it
+touches plus the selected characters. Only those characters are
+highlighted. An edit still replaces whole lines.
+
+To force one kind of reply, pass a mode: >lua
+    require("leader-k").open({ mode = "edit" }) -- always propose an edit
+    require("leader-k").open({ mode = "ask" })  -- always answer
+<
+In a buffer that is not 'modifiable', the default mode only answers.
+
                                                             *:LeaderK*
-:[range]LeaderK [instruction]
-    Edit the range (default: current line). An instruction skips the prompt.
+:[range]LeaderK [request]
+    Start on the range (default: current line); the model decides how to
+    reply. A request skips the prompt.
+
+                                                        *:LeaderKEdit*
+:[range]LeaderKEdit [instruction]
+    Like |:LeaderK|, but always proposes an edit.
+
+                                                         *:LeaderKAsk*
+:[range]LeaderKAsk [question]
+    Like |:LeaderK|, but always answers.
 
 ==============================================================================
 SETUP                                                      *leader-k-setup*
@@ -70,10 +103,17 @@ KEYS                                                        *leader-k-keys*
   keys.accept  <CR>       Apply the proposal.
   keys.reject  <BS>       Discard the proposal or stop a request.
   keys.cancel  <C-c>      Stop a request. A refine returns to its proposal.
-  keys.refine  <leader>k  Request a follow-up edit; empty input regenerates.
+  keys.refine  <leader>k  Follow up on a proposal or answer; empty input
+                          regenerates the last reply.
+  keys.focus   <C-w>w     Move into the answer float while it is on screen.
 
-In the prompt: Enter sends; Up/Down recall instructions; <C-c> cancels.
+Outside their session, or off screen, the keys keep their usual meaning.
+
+In the prompt: Enter sends; Up/Down recall requests; <C-c> cancels.
 Esc enters Normal mode, where Esc or q cancels.
+
+In the answer float: q or Esc closes the answer, keys.refine follows up, and
+keys.cancel stops a running request.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*
@@ -81,8 +121,10 @@ TRANSPORT                                               *leader-k-transport*
 Requests run through libcurl in-process. TLS is verified and redirects are
 not followed. If configured, the key is sent as a Bearer token and is not
 logged. A literal key remains in your config file. Each request includes
-the selected lines, surrounding code (up to `context_bytes` on each side),
-file metadata, and diagnostics on the selection.
+the selected lines, the selected characters of a characterwise selection,
+surrounding code (up to `context_bytes` on each side), file metadata,
+diagnostics on the selection, and the earlier requests and replies of the
+conversation.
 
 ==============================================================================
 HIGHLIGHTS                                             *leader-k-highlights*
@@ -91,13 +133,17 @@ HIGHLIGHTS                                             *leader-k-highlights*
   LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
   LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
   LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
-  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash
+  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash  LeaderKQuestion
+  LeaderKFocus
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*
 
-Selections edit whole lines. One session runs per buffer; sessions in other
+Edits replace whole lines. One session runs per buffer; sessions in other
 buffers can run in parallel. Request context comes from the current file.
-Tree-sitter syntax colors on proposed lines require a parser for the filetype.
+Tree-sitter syntax colors on proposed lines require a parser for the
+filetype. Answers use the bundled Markdown parser; colors in their code
+blocks require a parser for the block's language. Floats show their title
+and footer only with a border; see 'winborder'.
 
  vim:tw=78:ts=8:ft=help:norl:
