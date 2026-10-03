@@ -51,6 +51,7 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 ---@field before string[]
 ---@field omitted_before integer Lines above `before` that were left out.
 ---@field selection string[]
+---@field focus string|nil The part of the selection the user highlighted.
 ---@field after string[]
 ---@field omitted_after integer Lines below `after` that were left out.
 ---@field diagnostics string[]
@@ -95,6 +96,12 @@ local function first_message(ctx, instruction, mode)
   out[#out + 1] = "<selection>"
   vim.list_extend(out, ctx.selection)
   out[#out + 1] = "</selection>"
+  if ctx.focus then
+    out[#out + 1] = "The user highlighted this part of the selection:"
+    out[#out + 1] = "<highlight>"
+    out[#out + 1] = ctx.focus
+    out[#out + 1] = "</highlight>"
+  end
   if #ctx.after > 0 then
     out[#out + 1] = "<after>"
     vim.list_extend(out, ctx.after)

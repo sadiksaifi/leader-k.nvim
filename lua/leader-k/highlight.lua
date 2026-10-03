@@ -49,6 +49,7 @@ function M.setup()
   end
 
   set("LeaderKSelection", { link = "Visual" })
+  set("LeaderKFocus", { link = "LeaderKSelection" })
   set("LeaderKPending", { link = "NonText" })
   set("LeaderKBar", { link = "NonText" })
   set("LeaderKBarAdd", { link = "Added" })

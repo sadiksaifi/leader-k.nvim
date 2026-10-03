@@ -330,11 +330,31 @@ function M.draw(s)
   end
 
   local line_marks = {} ---@type table<integer, string>
+  local focus = s:focus_ranges()
+  local function mark_focus(group)
+    for _, f in ipairs(focus) do
+      vim.api.nvim_buf_set_extmark(buf, M.ns, f[1], f[2], {
+        end_row = f[3],
+        end_col = f[4],
+        hl_group = group,
+        priority = 150,
+        strict = false,
+      })
+    end
+  end
   if s.state == "prompt" then
-    for row = r0, r1 do
-      line_marks[row] = "selected"
+    if #focus > 0 then
+      mark_focus("LeaderKSelection")
+    else
+      for row = r0, r1 do
+        line_marks[row] = "selected"
+      end
     end
   else
+    -- Keep the question's subject in sight; a proposal shows its own diff.
+    if s.state == "answered" or (s.state == "running" and not s.proposal) then
+      mark_focus("LeaderKFocus")
+    end
     push(above, r0, header(s, now, win_width))
     for row = r0, r1 do
       line_marks[row] = "bar"

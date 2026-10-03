@@ -682,6 +682,32 @@ test("auto mode in a read-only buffer only answers", function()
   eq(s.mode, "ask")
 end)
 
+test("a characterwise selection sends its exact text and highlights only it", function()
+  use("answer")
+  lines(SAMPLE)
+  vim.keymap.set("x", "<leader>k", lk.open)
+  local word = "items[i].price"
+  local col = SAMPLE[6]:find(word, 1, true)
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_win_set_cursor(0, { 6, col - 1 })
+  vim.api.nvim_feedkeys("v" .. (#word - 1) .. "l" .. vim.keycode("<Space>") .. "k", "x", false)
+  local s = assert(session.get(buf))
+  eq(s.state, "prompt")
+  local hl = {}
+  for _, m in ipairs(marks(buf)) do
+    if m[4].hl_group == "LeaderKSelection" then
+      hl[#hl + 1] = { m[2], m[3], m[4].end_row, m[4].end_col }
+    end
+  end
+  eq(hl, { { 5, col - 1, 5, col - 1 + #word } }, "only the characters are highlighted")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "why?" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  wait_state(s, "answered")
+  local user = last_request().body.messages[2].content
+  truthy(user:find("<selection>\n" .. SAMPLE[6] .. "\n</selection>", 1, true), "whole line as the selection")
+  truthy(user:find("<highlight>\n" .. word .. "\n</highlight>", 1, true), user)
+end)
+
 test("whole file is sent; large files are cut at whole lines", function()
   use("fast")
   local big = {}

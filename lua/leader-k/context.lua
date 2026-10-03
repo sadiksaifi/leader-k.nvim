@@ -9,8 +9,9 @@ local M = {}
 ---@param r0 integer
 ---@param r1 integer
 ---@param selection string[] The selected lines.
+---@param focus string|nil The highlighted part of them, for a characterwise selection.
 ---@return leader_k.Context
-function M.build(buf, r0, r1, selection)
+function M.build(buf, r0, r1, selection, focus)
   local limit = config.options.context_bytes
   local name = vim.api.nvim_buf_get_name(buf)
   local diagnostics = {}
@@ -44,6 +45,7 @@ function M.build(buf, r0, r1, selection)
     before = vim.list_slice(before, first),
     omitted_before = first - 1,
     selection = selection,
+    focus = focus,
     after = vim.list_slice(after, 1, last),
     omitted_after = #after - last,
     diagnostics = diagnostics,

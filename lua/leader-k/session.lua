@@ -23,6 +23,7 @@ local sessions = {}
 ---@field buf integer
 ---@field win integer
 ---@field mark integer
+---@field focus_marks integer[]|nil Highlighted characters of a characterwise selection, one mark per line.
 ---@field mark_ns integer
 ---@field original string[]
 ---@field ctx leader_k.Context
@@ -208,6 +209,7 @@ function Session:destroy()
   if vim.api.nvim_buf_is_valid(self.buf) then
     render.clear(self.buf)
     pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, self.mark)
+    self:clear_focus()
     self:restore_maps()
   end
 end
@@ -367,9 +369,65 @@ function Session:check_stale()
   end
 end
 
+---@param focus integer[][] { row, start col, end col (exclusive) } per line, 0-based.
+function Session:set_focus(focus)
+  self.focus_marks = {}
+  for _, f in ipairs(focus) do
+    local row = f[1]
+    local len = #(vim.api.nvim_buf_get_lines(self.buf, row, row + 1, false)[1] or "")
+    local c0 = math.min(f[2], len)
+    local c1 = math.max(c0, math.min(f[3], len))
+    table.insert(
+      self.focus_marks,
+      vim.api.nvim_buf_set_extmark(
+        self.buf,
+        mark_ns,
+        row,
+        c0,
+        { end_row = row, end_col = c1, end_right_gravity = true }
+      )
+    )
+  end
+  -- Whole lines selected characterwise are a linewise selection.
+  if self:focus_text() == table.concat(self.original, "\n") then
+    self:clear_focus()
+  end
+end
+
+function Session:clear_focus()
+  for _, id in ipairs(self.focus_marks or {}) do
+    pcall(vim.api.nvim_buf_del_extmark, self.buf, mark_ns, id)
+  end
+  self.focus_marks = nil
+end
+
+---@return { [1]: integer, [2]: integer, [3]: integer, [4]: integer }[] ranges row, col, end row, end col
+function Session:focus_ranges()
+  local out = {}
+  for _, id in ipairs(self.focus_marks or {}) do
+    local m = vim.api.nvim_buf_get_extmark_by_id(self.buf, mark_ns, id, { details = true })
+    if m[1] then
+      out[#out + 1] = { m[1], m[2], m[3].end_row or m[1], m[3].end_col or m[2] }
+    end
+  end
+  return out
+end
+
+---@return string|nil
+function Session:focus_text()
+  if not self.focus_marks then
+    return nil
+  end
+  local parts = {}
+  for _, r in ipairs(self:focus_ranges()) do
+    vim.list_extend(parts, vim.api.nvim_buf_get_text(self.buf, r[1], r[2], r[3], r[4], {}))
+  end
+  return table.concat(parts, "\n")
+end
+
 function Session:build_context()
   local r0, r1 = render.region(self)
-  self.ctx = context.build(self.buf, r0, r1, self.original)
+  self.ctx = context.build(self.buf, r0, r1, self.original, self:focus_text())
 end
 
 -- Snapshot of the review a refine starts from.
@@ -615,7 +673,7 @@ end
 ---@param r0 integer
 ---@param r1 integer
 ---@param instruction string|nil
----@param opts { mode: leader_k.Mode|nil }|nil
+---@param opts { mode: leader_k.Mode|nil, focus: integer[][]|nil }|nil See Session:set_focus().
 function M.start(r0, r1, instruction, opts)
   local mode = (opts or {}).mode or "auto"
   local win = vim.api.nvim_get_current_win()
@@ -667,6 +725,9 @@ function M.start(r0, r1, instruction, opts)
   }, Session)
   self:set_region(r0, r1)
   self.original = vim.api.nvim_buf_get_lines(buf, r0, r1 + 1, false)
+  if opts and opts.focus then
+    self:set_focus(opts.focus)
+  end
   local first = self.original[1] or ""
   for _, l in ipairs(self.original) do
     if l:find("%S") then

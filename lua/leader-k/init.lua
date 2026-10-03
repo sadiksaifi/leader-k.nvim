@@ -33,16 +33,25 @@ function M.open(opts)
     M.setup()
   end
   local mode = vim.fn.mode()
-  local r0, r1
+  local r0, r1, focus
   if mode == "v" or mode == "V" or mode == "\22" then
     local a, b = vim.fn.line("v"), vim.fn.line(".")
     r0, r1 = math.min(a, b) - 1, math.max(a, b) - 1
+    if mode ~= "V" then
+      focus = {}
+      local region = vim.fn.getregionpos(vim.fn.getpos("v"), vim.fn.getpos("."), { type = mode })
+      for _, piece in ipairs(region) do
+        -- Positions are 1-based; the end is the last byte of the last character.
+        local from, to = piece[1], piece[2]
+        focus[#focus + 1] = { from[2] - 1, from[3] - 1, to[3] }
+      end
+    end
     vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
   else
     local row = vim.api.nvim_win_get_cursor(0)[1] - 1
     r0, r1 = row, row
   end
-  require("leader-k.session").start(r0, r1, nil, opts)
+  require("leader-k.session").start(r0, r1, nil, vim.tbl_extend("force", opts or {}, { focus = focus }))
 end
 
 ---Starts a session on lines l1..l2 (1-based), sending `instruction` right
