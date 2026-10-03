@@ -74,6 +74,8 @@ class H(BaseHTTPRequestHandler):
                 send(b"data: [DONE]\n\n"); return
             if model in ('answer', 'answer_slow'):
                 stream(send, ANSWER, 0.05 if model == 'answer_slow' else 0.0); return
+            if model == 'untagged':
+                send(chunk(content="This adds up price times quantity.")); send(chunk(content="", finish="stop")); send(b"data: [DONE]\n\n"); return
             if model == 'answer_length':
                 send(chunk(content="<answer>\nThe first half")); send(chunk(content="", finish="length")); send(b"data: [DONE]\n\n"); return
             if model == 'midstream':

@@ -136,7 +136,7 @@ function Session:update_proposal()
     return
   end
   self.dirty = false
-  local ex = prompt.extract(self.raw, false)
+  local ex = prompt.extract(self.raw, false, prompt.untagged[self.mode])
   if ex.kind == "answer" or (ex.kind == "code" and self.mode == "ask") then
     self.phase = "answering"
     self.answer_text = ex.kind == "answer" and ex.text or self:fence(ex.text)
@@ -484,7 +484,7 @@ end
 function Session:finish(finish_reason)
   self:stop_timer()
   self:set_busy(false)
-  local ex = prompt.extract(self.raw, true)
+  local ex = prompt.extract(self.raw, true, prompt.untagged[self.mode])
   if ex.kind == "error" then
     return self:fail("the model declined: " .. (ex.text ~= "" and ex.text or "no reason given"))
   end
@@ -617,7 +617,7 @@ end
 ---@param instruction string|nil
 ---@param opts { mode: leader_k.Mode|nil }|nil
 function M.start(r0, r1, instruction, opts)
-  local mode = (opts or {}).mode or "edit"
+  local mode = (opts or {}).mode or "auto"
   local win = vim.api.nvim_get_current_win()
   local buf = vim.api.nvim_win_get_buf(win)
   local existing = sessions[buf]
@@ -633,7 +633,11 @@ function M.start(r0, r1, instruction, opts)
     end
     return
   end
-  if mode ~= "ask" and not vim.bo[buf].modifiable then
+  -- A read-only buffer can still be asked about.
+  if mode == "auto" and not vim.bo[buf].modifiable then
+    mode = "ask"
+  end
+  if mode == "edit" and not vim.bo[buf].modifiable then
     vim.api.nvim_echo({ { "leader-k: this buffer is not modifiable", "WarningMsg" } }, false, {})
     return
   end
@@ -732,6 +736,8 @@ function M.start(r0, r1, instruction, opts)
   local title, placeholder
   if mode == "ask" then
     title, placeholder = "Ask about " .. where, "Ask a question."
+  elseif mode == "auto" then
+    title, placeholder = where:gsub("^%l", string.upper), "Ask, or describe a change."
   else
     title, placeholder = "Edit " .. where, "Describe the change."
   end

@@ -16,6 +16,22 @@ Reply with the complete new text for the selected region inside one <code></code
 - No markdown fences, no commentary, no text outside the block.
 - If the instruction cannot be done by rewriting this selection, reply with <error>one short sentence</error> instead.
 ]],
+  auto = [[
+You help with code in Neovim. The user selected a region of a file and wrote a request about it.
+
+If the request asks for a change to the selected code, reply with the complete new text for the selected region inside one <code></code> block, and nothing else.
+- The block replaces the selection exactly. Include every line of the new region, unchanged lines too. Never elide code or write placeholders.
+- Do not repeat code from <before> or <after>.
+- Keep the file's indentation style (tabs or spaces) and the selection's base indentation.
+- No markdown fences, no commentary, no text outside the block.
+- If the change cannot be done by rewriting this selection, reply with <error>one short sentence</error> instead.
+
+Otherwise, for a question, an explanation, or a review, reply inside one <answer></answer> block, in Markdown, and nothing else.
+- Lead with the answer. Keep it short: it is shown in a small window next to the code.
+- Refer to code by its line number in the file.
+- Put code in fenced blocks with a language tag.
+- Do not repeat the whole selection.
+]],
   ask = [[
 You answer questions about code in Neovim. The user selected a region of a file and asked about it.
 
@@ -45,7 +61,10 @@ Reply inside one <answer></answer> block, in Markdown, and nothing else.
 ---@field answer string|nil The Markdown answer, once the reply was an answer.
 
 -- How the user's text is introduced in each mode.
-local LABEL = { edit = "Instruction", ask = "Question" }
+local LABEL = { auto = "Request", edit = "Instruction", ask = "Question" }
+
+-- How a reply without tags is read in each mode.
+M.untagged = { auto = "answer", edit = "code", ask = "answer" }
 
 ---@param ctx leader_k.Context
 ---@param instruction string
@@ -109,6 +128,12 @@ local function follow_up(turn, prev, mode)
   local ask
   if mode == "ask" then
     ask = "Answer the follow-up about the same selection in <answer></answer> again."
+  elseif mode == "auto" and prev.answer then
+    ask =
+      "If this asks for a change, reply with the full new region for the same selection in <code></code>. Otherwise reply in <answer></answer>."
+  elseif mode == "auto" then
+    ask =
+      "If this asks for a change, revise your replacement and reply with the full new region in <code></code> again. Otherwise reply in <answer></answer>."
   elseif prev.answer then
     ask = "Reply with the full new region for the same selection in <code></code>."
   else

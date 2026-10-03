@@ -21,9 +21,14 @@ function M.setup(opts)
   })
 end
 
----Edits the visual selection, or the current line in Normal mode. When the
----buffer already has a proposal, refines it instead.
-function M.open()
+---@class leader_k.OpenOpts
+---@field mode? leader_k.Mode "auto" (default) lets the model edit or answer; "edit" or "ask" forces one.
+
+---Starts a session on the visual selection, or the current line in Normal
+---mode. When the buffer already has a proposal or an answer, asks for a
+---follow-up instead.
+---@param opts leader_k.OpenOpts|nil
+function M.open(opts)
   if not did_setup then
     M.setup()
   end
@@ -37,32 +42,20 @@ function M.open()
     local row = vim.api.nvim_win_get_cursor(0)[1] - 1
     r0, r1 = row, row
   end
-  require("leader-k.session").start(r0, r1)
+  require("leader-k.session").start(r0, r1, nil, opts)
 end
 
 ---Starts a session on lines l1..l2 (1-based), sending `instruction` right
----away when it is not empty.
+---away when it is not empty. Backs the commands.
 ---@param l1 integer
 ---@param l2 integer
 ---@param instruction string|nil
----@param opts { mode: leader_k.Mode|nil }|nil
+---@param opts leader_k.OpenOpts|nil
 function M.run(l1, l2, instruction, opts)
   if not did_setup then
     M.setup()
   end
   require("leader-k.session").start(l1 - 1, l2 - 1, instruction, opts)
-end
-
----Starts an edit of lines l1..l2 (1-based), sending `instruction` right away
----when it is not empty. Backs the :LeaderK command.
----@param l1 integer
----@param l2 integer
----@param instruction string|nil
-function M.edit(l1, l2, instruction)
-  if not did_setup then
-    M.setup()
-  end
-  require("leader-k.session").start(l1 - 1, l2 - 1, instruction)
 end
 
 return M
