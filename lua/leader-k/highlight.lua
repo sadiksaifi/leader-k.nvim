@@ -73,10 +73,12 @@ function M.setup()
   set("LeaderKUserBar", { link = "Function" })
   local normal, accent = get("Normal"), get("LeaderKUserBar")
   if normal.bg and accent.fg then
-    set("LeaderKUser", { bg = blend(normal.bg, accent.fg, 0.12) })
+    set("LeaderKUser", { bg = blend(normal.bg, accent.fg, 0.2) })
   else
     set("LeaderKUser", { link = "CursorLine" })
   end
+  -- The bar itself sits on the tint.
+  set("LeaderKUserEdge", { fg = accent.fg, bg = get("LeaderKUser").bg })
 end
 
 return M

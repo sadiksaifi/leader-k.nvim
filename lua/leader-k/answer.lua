@@ -10,6 +10,10 @@ local ns = vim.api.nvim_create_namespace("leader-k.answer")
 local MAX_WIDTH = 80
 local MIN_WIDTH = 30
 
+-- Rows (1-based) of the user's messages, per answer buffer, for the column.
+---@type table<integer, table<integer, true>>
+local user_rows = {}
+
 ---@param s leader_k.Session
 ---@return integer|nil
 local function code_window(s)
@@ -25,9 +29,13 @@ end
 
 ---Each turn as its question, then its answer or a note about its edit.
 ---@param s leader_k.Session
----@return string[] lines, integer[] questions 0-based rows of question lines, integer[] notes 0-based rows of notes, integer latest 0-based row where the last turn starts
+---@return string[] lines, integer[] questions 0-based rows of the user's messages, integer[] notes 0-based rows of notes, integer latest 0-based row where the last turn starts
 local function transcript(s)
   local out, questions, notes, latest = {}, {}, {}, 0
+  local function ask(line)
+    questions[#questions + 1] = #out
+    out[#out + 1] = line
+  end
   for i, turn in ipairs(s.turns) do
     local text, note = turn.answer, false
     if i == #s.turns and s.state == "running" then
@@ -45,11 +53,13 @@ local function transcript(s)
         out[#out + 1] = ""
       end
       latest = #out
+      -- A tinted blank row above and below pads the message. The blank row
+      -- below also keeps it out of the answer's first Markdown paragraph.
+      ask("")
       for _, l in ipairs(vim.split(turn.instruction, "\n", { plain = true })) do
-        questions[#questions + 1] = #out
-        out[#out + 1] = "  " .. l
+        ask(l)
       end
-      -- A blank line keeps the question out of the answer's first paragraph.
+      ask("")
       out[#out + 1] = ""
       if note then
         notes[#notes + 1] = #out
@@ -74,6 +84,12 @@ local function create_buf(s)
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    callback = function()
+      user_rows[buf] = nil
+    end,
+  })
   map("q", function()
     s:destroy()
   end)
@@ -117,6 +133,9 @@ local function open_win(s, buf)
   wo.number, wo.relativenumber, wo.signcolumn, wo.foldcolumn = false, false, "no", "0"
   wo.cursorline, wo.spell, wo.list, wo.fillchars = false, false, false, "eob: "
   wo.winfixwidth, wo.winfixbuf = true, true
+  -- The bar beside the user's messages, drawn on every screen row so it
+  -- stays unbroken where a message wraps.
+  wo.statuscolumn = "%!v:lua.require'leader-k.answer'.column()"
   -- Closing the panel ends a conversation that has nothing else on screen.
   vim.api.nvim_create_autocmd("WinClosed", {
     group = s.augroup,
@@ -151,6 +170,16 @@ function M.close(s)
   end
 end
 
+---The panel's 'statuscolumn': a bar on the user's messages, blank elsewhere.
+---@return string
+function M.column()
+  local rows = user_rows[vim.api.nvim_win_get_buf(vim.g.statusline_winid)]
+  if rows and rows[vim.v.lnum] then
+    return "%#LeaderKUserEdge#▎%#LeaderKUser# "
+  end
+  return "  "
+end
+
 ---@param s leader_k.Session
 ---@return boolean
 function M.focused(s)
@@ -179,14 +208,12 @@ function M.sync(s)
     vim.api.nvim_buf_set_lines(abuf, 0, -1, false, lines)
     vim.bo[abuf].modifiable = false
     vim.api.nvim_buf_clear_namespace(abuf, ns, 0, -1)
+    local rows = {}
     for _, row in ipairs(questions) do
-      vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, {
-        line_hl_group = "LeaderKUser",
-        virt_text = { { "▎", "LeaderKUserBar" } },
-        virt_text_pos = "overlay",
-        hl_mode = "combine",
-      })
+      rows[row + 1] = true
+      vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, { line_hl_group = "LeaderKUser" })
     end
+    user_rows[abuf] = rows
     for _, row in ipairs(notes) do
       vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, {
         end_col = #lines[row + 1],
