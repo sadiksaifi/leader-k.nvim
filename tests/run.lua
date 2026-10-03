@@ -638,7 +638,7 @@ test("the answer is a split on the right; closing it ends the answer", function(
   eq(vim.api.nvim_win_get_config(win).relative, "", "a split, not a float")
   eq(vim.fn.winlayout(), { "row", { { "leaf", code_win }, { "col", { { "leaf", win }, { "leaf", iwin } } } } })
   eq(vim.api.nvim_get_current_win(), code_win, "focus stays in the code")
-  truthy(vim.wo[win].statusline:find("close", 1, true), vim.wo[win].statusline)
+  truthy(vim.wo[iwin].winbar:find("q close", 1, true), vim.wo[iwin].winbar)
   local header = false
   for _, m in ipairs(marks()) do
     header = header or m[4].virt_lines_above == true
@@ -691,7 +691,7 @@ test("follow-ups are typed in the panel; an edit moves focus to the code", funct
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
   wait_state(s, "review")
   eq(vim.api.nvim_get_current_win(), code_win, "a proposal is reviewed in the code")
-  truthy(vim.wo[s.answer_win].statusline:find("Review it in the code", 1, true), vim.wo[s.answer_win].statusline)
+  truthy(vim.wo[s.input_win].winbar:find("Review it in the code", 1, true), vim.wo[s.input_win].winbar)
   local header = false
   for _, m in ipairs(marks()) do
     header = header or m[4].virt_lines_above == true

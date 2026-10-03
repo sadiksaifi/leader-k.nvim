@@ -23,10 +23,10 @@ During review: Enter accepts, Backspace rejects, <leader>k follows up, and
 that edit is undone. Errors appear in |:messages|.
 
 Once there is an answer, the panel holds the conversation. Its transcript
-sits above an input for follow-ups, and the line between them shows the
-status. The code keeps the selection marked; it shows a header and a diff
-only when a follow-up proposes an edit, and focus then moves to the code
-for review. The panel stays open until the session ends.
+sits above an input for follow-ups, and a dim divider above the input
+shows the status. The code keeps the selection marked; it shows a header
+and a diff only when a follow-up proposes an edit, and focus then moves to
+the code for review. The panel stays open until the session ends.
 
 While an answer is shown: Backspace closes it and <leader>k moves into the
 panel input. Focus stays in the code until you move it. Closing either
@@ -147,7 +147,8 @@ In the answer panel, your messages use the color of LeaderKUserBar for the
 bar on their left and LeaderKUser for their background. LeaderKUserBar links to Function.
 LeaderKUser blends the background of Normal with the color of LeaderKUserBar
 at 20%, or links to CursorLine when either color is missing. Notes such as
-"Proposed an edit." use LeaderKNote.
+"Proposed an edit." use LeaderKNote. The divider above the input uses
+LeaderKDivider, the color of NonText on the background of Normal.
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*

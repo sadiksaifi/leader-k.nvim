@@ -1,6 +1,6 @@
 -- The answer panel: a column on the right of the editor that holds a
 -- conversation once it has an answer. A Markdown transcript sits above an
--- input for follow-ups, and the line between them shows the status. Focus
+-- input for follow-ups. A dim divider with the status tops the input. Focus
 -- stays in the code until the user moves it.
 
 local config = require("leader-k.config")
@@ -91,20 +91,32 @@ local function hint(lhs, label)
   return ("%%#LeaderKKey#%s%%#LeaderKHint# %s%%*"):format(escape(render.key_label(lhs)), label)
 end
 
----What the conversation is doing, and how to stop or close it.
+---The divider above the input: a dim rule that carries what the
+---conversation is doing and how to stop or close it, as wide as the input.
 ---@param s leader_k.Session
-local function status(s)
-  local left, right
+---@param width integer
+local function divider(s, width)
+  local spin, left, right
   if s.state == "running" then
     local frame, text = render.progress(s, vim.uv.now())
-    left = ("%%#LeaderKSpinner#%s%%* %s"):format(frame, escape(text))
-    right = hint(config.options.keys.cancel, "stop")
-  elseif s.state == "review" then
-    left, right = "Proposed an edit. Review it in the code.", hint("q", "close")
+    spin, left = frame .. " ", text
+    right = render.key_label(config.options.keys.cancel) .. " stop"
   else
-    left, right = "%#LeaderKFooter#" .. escape(s.model_label or "") .. "%*", hint("q", "close")
+    left = s.state == "review" and "Proposed an edit. Review it in the code." or (s.model_label or "")
+    right = "q close"
   end
-  return " " .. left .. "%=" .. right .. " "
+  local used = 4 + vim.fn.strdisplaywidth((spin or "") .. left)
+  local fill = width - used - vim.fn.strdisplaywidth(right) - 4
+  if fill < 1 then
+    right, fill = "", math.max(width - used, 0)
+  end
+  return ("── %s%s %s%s%s"):format(
+    spin and ("%#LeaderKSpinner#" .. spin .. "%#LeaderKDivider#") or "",
+    escape(left),
+    string.rep("─", fill),
+    right ~= "" and (" " .. escape(right) .. " ") or "",
+    right ~= "" and "──" or ""
+  )
 end
 
 ---@param win integer
@@ -143,6 +155,10 @@ local function refresh_input(s)
   end
   vim.api.nvim_buf_clear_namespace(buf, input_ns, 0, -1)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  -- A blank row above and below the text gives it room inside the box.
+  local pad = { { { "", "" } } }
+  vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, { virt_lines = pad, virt_lines_above = true })
+  vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, { virt_lines = pad })
   if #lines == 1 and lines[1] == "" then
     local refine = s.state == "review"
     local text
@@ -156,12 +172,18 @@ local function refresh_input(s)
       virt_text_pos = "overlay",
     })
   end
-  -- Every row the text wraps to stays in view. The height counts the
-  -- winbar, which holds the status when windows have no status line.
-  local h = math.max(1, math.min(vim.api.nvim_win_text_height(win, {}).all, MAX_INPUT))
-  h = h + (vim.wo[win].winbar ~= "" and 1 or 0)
-  if vim.api.nvim_win_get_height(win) ~= h then
-    vim.api.nvim_win_set_height(win, h)
+  -- Every row the text wraps to stays in view, with the padding. The
+  -- height counts the winbar that holds the divider.
+  local rows = vim.api.nvim_win_text_height(win, {}).all
+  local h = math.max(3, math.min(rows, MAX_INPUT + 2))
+  if vim.api.nvim_win_get_height(win) ~= h + 1 then
+    vim.api.nvim_win_set_height(win, h + 1)
+  end
+  -- The padding above the first line shows only while the view starts on it.
+  if rows <= h then
+    vim.api.nvim_win_call(win, function()
+      vim.fn.winrestview({ topline = 1, topfill = 1 })
+    end)
   end
 end
 
@@ -238,7 +260,7 @@ local function create_input(s)
   map("n", "q", function()
     s:destroy()
   end)
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinEnter", "WinLeave" }, {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "CursorMovedI", "WinEnter", "WinLeave" }, {
     buffer = buf,
     callback = function()
       -- WinLeave fires before the new window is current.
@@ -292,6 +314,13 @@ local function open_panel(s)
   -- The input wears the color of the user's messages it turns into.
   vim.wo[iwin].winhighlight = "Normal:LeaderKUser,NormalNC:LeaderKUser,EndOfBuffer:LeaderKUser"
   vim.wo[iwin].statuscolumn = "%#LeaderKUserEdge#▎%#LeaderKUser# "
+  -- The rows around the box stay plain: a blank row above the divider and a
+  -- dim line of hints below the box, where windows have status lines.
+  vim.wo[awin].winhighlight = "StatusLine:Normal,StatusLineNC:Normal,WinSeparator:Normal"
+  vim.wo[awin].fillchars = "eob: ,stl: ,stlnc: ,horiz: ,horizup: ,horizdown: "
+  vim.wo[awin].statusline = " "
+  vim.wo[iwin].winhighlight = vim.wo[iwin].winhighlight
+    .. ",WinBar:LeaderKDivider,WinBarNC:LeaderKDivider,StatusLine:LeaderKDivider,StatusLineNC:LeaderKDivider"
   vim.wo[iwin].statusline = (" %s  %s  %s"):format(
     hint("<CR>", "send"),
     hint("<Up>", "history"),
@@ -384,12 +413,7 @@ function M.sync(s)
     open_panel(s)
   end
   local awin, iwin = s.answer_win, s.input_win
-  -- The status sits on the line between the transcript and the input: the
-  -- transcript's status line when windows have one, else the input's winbar.
-  local bar = status(s)
-  local own = vim.o.laststatus == 1 or vim.o.laststatus == 2
-  set_wo(awin, "statusline", own and bar or "")
-  set_wo(iwin, "winbar", own and "" or bar)
+  set_wo(iwin, "winbar", divider(s, vim.api.nvim_win_get_width(iwin)))
   refresh_input(s)
 
   -- Follow the stream, then show the latest turn from its question, with

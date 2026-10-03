@@ -79,6 +79,8 @@ function M.setup()
   end
   -- The bar itself sits on the tint.
   set("LeaderKUserEdge", { fg = accent.fg, bg = get("LeaderKUser").bg })
+  -- The divider above the panel input: dim, on the panel's background.
+  set("LeaderKDivider", { fg = get("NonText").fg, bg = normal.bg })
 end
 
 return M
