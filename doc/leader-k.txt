@@ -15,7 +15,7 @@ sidebar and moves into its input. Type a request and press Enter. With
 nothing attached, the first message sends the current file.
 
 While the sidebar is open, select code in any buffer. A hint above the
-selection names keys.attach, <leader>k by default. Press it to attach the
+selection names keys.attach, <C-l> by default. Press it to attach the
 selection to the next message; the cursor stays in the code. Repeat it to
 collect several selections. `@path` in a message attaches that project
 file. The attachments show above the input until they are sent.
@@ -28,9 +28,10 @@ commands.
 
 Edits are proposals. When a reply proposes edits, the first changed file
 opens in the code window with the edit shown inline, and the transcript
-lists every changed file. A hint in the bottom right corner of the code
-window names the review keys. Accepting writes the edit into the buffer,
-as one undo step, without saving it. A file edited after the proposal
+lists every changed file. The cursor moves from an empty input to the
+transcript, where the review keys work; the row under the input names them.
+Accepting writes the edit into the buffer, as one undo step, without saving
+it. A file edited after the proposal
 cannot be accepted; reject it or ask again. The next message tells the
 model which files were accepted and rejected.
 
@@ -101,35 +102,35 @@ Run |:checkhealth| leader-k to inspect your setup.
 ==============================================================================
 KEYS                                                        *leader-k-keys*
 
-While a file is under review, in its buffer:
-  keys.accept      <CR>   Accept the file.
-  keys.reject      <BS>   Reject the file.
+In the transcript, while a file is under review:
+  keys.accept      a      Accept the file.
+  keys.reject      r      Reject the file.
   keys.next_file   ]f     Review the next changed file.
   keys.prev_file   [f     Review the previous changed file.
-  keys.next_hunk   ]c     Go to the next change in the file.
-  keys.prev_hunk   [c     Go to the previous change in the file.
+  keys.next_hunk   ]c     Move the code window to the next change.
+  keys.prev_hunk   [c     Move the code window to the previous change.
 
-These keys act only while the file is under review and the sidebar is
-open. Elsewhere they keep their usual meaning, including your own mappings.
+The file's buffer keeps its own keys during the review.
 
-In Visual mode, while the sidebar is open:
-  keys.attach      <leader>k   Attach the selection.
-
-The attach key replaces a global Visual-mode mapping of the same key only
-while the sidebar is open, and restores it when the sidebar closes.
-
-In the transcript:
+Also in the transcript:
   <CR>             Review the changed file under the cursor.
   keys.accept_all  A      Accept every pending file.
   keys.reject_all  R      Reject every pending file.
-  keys.refine      <leader>k, i, a   Move into the input.
+  keys.refine      <leader>k, i   Move into the input.
+
+In Visual mode, while the sidebar is open:
+  keys.attach      <C-l>  Attach the selection.
+
+The attach key replaces a global Visual-mode mapping of the same key only
+while the sidebar is open, and restores it when the sidebar closes.
 
 In the sidebar:
   keys.cancel      <C-c>  Stop the reply.
   q                       Close the sidebar and end the conversation.
 
 In the input: Enter sends; Up/Down recall messages. With the input empty,
-Esc returns to the code and Backspace removes the newest attachment.
+Backspace removes the newest attachment, and Esc goes to the transcript
+while files wait for review, else back to the code.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*

@@ -172,8 +172,8 @@ local function transcript(S)
       add(
         ("%s on a file opens it. %s accepts all, %s rejects all."):format(
           config.key_label("<CR>"),
-          keys.accept_all,
-          keys.reject_all
+          config.key_label(keys.accept_all),
+          config.key_label(keys.reject_all)
         ),
         "LeaderKNote"
       )
@@ -219,14 +219,27 @@ local function divider(S, width)
   return table.concat(out)
 end
 
----The row of key hints at the bottom of the input box.
+---The row of key hints at the bottom of the input box. While a file is
+---under review and the input does not have focus, it names the review
+---keys, which work in the transcript.
+---@param S leader_k.Conversation
 ---@param focused boolean The input has focus.
 ---@return string[][] chunks
-local function hints(focused)
+local function hints(S, focused)
   local keys = config.options.keys
   local list
+  local r = review.current
   if focused then
-    list = { { "<CR>", "send" }, { "<Up>", "history" }, { "<Esc>", "back to the code" } }
+    local esc = #S.changes:pending() > 0 and "review" or "back to the code"
+    list = { { "<CR>", "send" }, { "<Up>", "history" }, { "<Esc>", esc } }
+  elseif r then
+    list = r.stale and { { keys.reject, "reject" } } or { { keys.accept, "accept" }, { keys.reject, "reject" } }
+    if #S.changes:pending() > 1 then
+      list[#list + 1] = { keys.next_file, "next file" }
+    end
+    if #r.change.hunks > 1 and not r.stale then
+      list[#list + 1] = { keys.next_hunk, "next change" }
+    end
   else
     list = { { keys.refine, "type" }, { "q", "close" } }
   end
@@ -291,6 +304,46 @@ function M.focus_input(S)
   end
 end
 
+---Whether focus is in the input and nothing is typed there.
+---@param S leader_k.Conversation
+---@return boolean
+function M.input_idle(S)
+  local p = S.panel
+  if not (p and valid(p.iwin) and vim.api.nvim_get_current_win() == p.iwin) then
+    return false
+  end
+  local lines = vim.api.nvim_buf_get_lines(p.ibuf, 0, -1, false)
+  return #lines == 1 and lines[1] == ""
+end
+
+---Moves focus into the transcript, onto the row of the file under review.
+---@param S leader_k.Conversation
+function M.focus_transcript(S)
+  local p = S.panel
+  if not (p and valid(p.twin)) then
+    return
+  end
+  vim.cmd.stopinsert()
+  vim.api.nvim_set_current_win(p.twin)
+  local current = review.current and review.current.change
+  for row, c in pairs(p.file_rows or {}) do
+    if c == current then
+      vim.api.nvim_win_set_cursor(p.twin, { row, 0 })
+    end
+  end
+end
+
+---With files to review, Esc in an empty input goes to the transcript,
+---where the review keys work. Otherwise it goes back to the code.
+---@param S leader_k.Conversation
+local function leave_input(S)
+  if #S.changes:pending() > 0 then
+    M.focus_transcript(S)
+  else
+    M.to_code(S)
+  end
+end
+
 ---@param S leader_k.Conversation
 local function refresh_input(S)
   local p = state(S)
@@ -314,7 +367,7 @@ local function refresh_input(S)
   end
   vim.api.nvim_buf_set_extmark(buf, input_ns, 0, 0, { virt_lines = chips, virt_lines_above = true })
   vim.api.nvim_buf_set_extmark(buf, input_ns, #lines - 1, 0, {
-    virt_lines = { { { "", "" } }, hints(focused) },
+    virt_lines = { { { "", "" } }, hints(S, focused) },
   })
   if #lines == 1 and lines[1] == "" then
     local text
@@ -375,7 +428,7 @@ local function create_transcript(S)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
   map_common(S, buf)
-  for _, lhs in ipairs({ keys.refine, "i", "a" }) do
+  for _, lhs in ipairs({ keys.refine, "i" }) do
     map(lhs, function()
       M.focus_input(S)
     end)
@@ -383,8 +436,31 @@ local function create_transcript(S)
   map("<CR>", function()
     local c = state(S).file_rows[vim.api.nvim_win_get_cursor(0)[1]]
     if c then
-      agent().review(c, true)
+      agent().review(c)
     end
+  end)
+  -- The review keys act on the file under review.
+  local function decide(status)
+    return function()
+      local c = review.current and review.current.change
+      if c then
+        agent().decide(c, status)
+      end
+    end
+  end
+  map(keys.accept, decide("accepted"))
+  map(keys.reject, decide("rejected"))
+  map(keys.next_file, function()
+    agent().step_file(1)
+  end)
+  map(keys.prev_file, function()
+    agent().step_file(-1)
+  end)
+  map(keys.next_hunk, function()
+    review.jump_hunk(1)
+  end)
+  map(keys.prev_hunk, function()
+    review.jump_hunk(-1)
   end)
   map(keys.accept_all, function()
     agent().decide_all("accepted")
@@ -461,9 +537,9 @@ local function create_input(S)
     end
   end)
   map("n", "<Esc>", function()
-    M.to_code(S)
+    leave_input(S)
   end)
-  -- With nothing typed, Esc returns to the code and Backspace drops the
+  -- With nothing typed, Esc leaves the input and Backspace drops the
   -- newest attachment. Otherwise they edit the text, as usual.
   local function empty()
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -474,7 +550,7 @@ local function create_input(S)
       return "<Esc>"
     end
     vim.schedule(function()
-      M.to_code(S)
+      leave_input(S)
     end)
     return ""
   end, { buffer = buf, expr = true, nowait = true, silent = true })

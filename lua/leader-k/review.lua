@@ -1,11 +1,10 @@
 -- Shows one staged change in the code window: its buffer with the removed
 -- lines marked and the new lines as virtual lines. The buffer text stays
--- as it is until the change is accepted. Review keys work in that buffer
--- while it is under review and put back what they shadowed afterwards.
+-- as it is until the change is accepted. The review keys live in the
+-- panel; the file's buffer keeps its own keys.
 
 local changes = require("leader-k.changes")
 local config = require("leader-k.config")
-local hint = require("leader-k.hint")
 
 local M = {}
 
@@ -13,25 +12,14 @@ M.ns = vim.api.nvim_create_namespace("leader-k.review")
 
 local BAR = "▎"
 
----@class leader_k.ReviewActions
----@field accept fun()
----@field reject fun()
----@field next_file fun()
----@field prev_file fun()
-
 ---@class leader_k.Review
 ---@field change leader_k.Change
 ---@field buf integer
----@field saved_maps table[]
 ---@field augroup integer
----@field position string|nil Such as "2/3": the file's place among the files to review.
 ---@field stale boolean|nil
 
 ---@type leader_k.Review|nil
 M.current = nil
-
--- Names the review keys in the corner of the window that shows the file.
-M.hint = hint.new()
 
 ---@param buf integer
 ---@return integer|nil
@@ -356,55 +344,15 @@ local function show_line(r, win, line)
   end
 end
 
----Runs what `lhs` would do without the review's mapping.
----@param lhs string
----@param prev table|nil maparg() dict of the shadowed buffer-local mapping.
-local function run_shadowed(lhs, prev)
-  local raw = vim.keycode(lhs)
-  local m = prev
-  if not m then
-    for _, g in ipairs(vim.api.nvim_get_keymap("n")) do
-      if g.lhsraw == raw or g.lhsrawalt == raw then
-        m = g
-        break
-      end
-    end
-  end
-  local count = vim.v.count > 0 and tostring(vim.v.count) or ""
-  if not m then
-    vim.api.nvim_feedkeys(count .. raw, "n", false)
-    return
-  end
-  if m.callback and m.expr == 0 then
-    m.callback()
-    return
-  end
-  local keys
-  if m.callback then
-    keys = m.callback() or ""
-    if m.replace_keycodes == 1 then
-      keys = vim.keycode(keys)
-    end
-  else
-    local rhs = m.rhs:gsub("<[Ss][Ii][Dd]>", ("<SNR>%d_"):format(m.sid))
-    keys = m.expr == 1 and vim.fn.eval(rhs) or vim.keycode(rhs)
-  end
-  if m.noremap ~= 0 then
-    vim.api.nvim_feedkeys(count .. keys, "n", false)
-  elseif vim.startswith(keys, raw) then
-    -- As in Vim, a recursive mapping's own lhs at the start of its rhs is
-    -- not mapped again. Here that also keeps the review's map from looping.
-    vim.api.nvim_feedkeys(count .. raw, "n", false)
-    vim.api.nvim_feedkeys(keys:sub(#raw + 1), "m", false)
-  else
-    vim.api.nvim_feedkeys(count .. keys, "m", false)
-  end
-end
-
----@param r leader_k.Review
+---Moves the cursor of the window that shows the file under review to its
+---next or previous change, wrapping around.
 ---@param step integer 1 or -1.
-local function jump_hunk(r, step)
-  local win = vim.api.nvim_get_current_win()
+function M.jump_hunk(step)
+  local r = M.current
+  local win = r and window_for(r.buf)
+  if not (r and win) then
+    return
+  end
   local lines = M.hunk_lines(r.change)
   if #lines == 0 then
     return
@@ -431,90 +379,8 @@ local function jump_hunk(r, step)
   show_line(r, win, target)
 end
 
----@param r leader_k.Review
----@param actions leader_k.ReviewActions
-local function install_maps(r, actions)
-  local keys = config.options.keys
-  local buf = r.buf
-  local function map(lhs, fn, desc)
-    local prev = vim.api.nvim_buf_call(buf, function()
-      return vim.fn.maparg(lhs, "n", false, true)
-    end)
-    if prev and prev.buffer == 1 then
-      table.insert(r.saved_maps, prev)
-    else
-      prev = nil
-    end
-    table.insert(r.saved_maps, { lhs = lhs, unmap = true })
-    vim.keymap.set("n", lhs, function()
-      if M.current ~= r then
-        run_shadowed(lhs, prev)
-        return
-      end
-      fn()
-    end, { buffer = buf, nowait = true, silent = true, desc = "leader-k: " .. desc })
-  end
-  map(keys.accept, actions.accept, "accept the file")
-  map(keys.reject, actions.reject, "reject the file")
-  map(keys.next_file, actions.next_file, "next changed file")
-  map(keys.prev_file, actions.prev_file, "previous changed file")
-  map(keys.next_hunk, function()
-    jump_hunk(r, 1)
-  end, "next change")
-  map(keys.prev_hunk, function()
-    jump_hunk(r, -1)
-  end, "previous change")
-end
-
----@param r leader_k.Review
-local function restore_maps(r)
-  if not vim.api.nvim_buf_is_valid(r.buf) then
-    return
-  end
-  for _, m in ipairs(r.saved_maps) do
-    if m.unmap then
-      pcall(vim.keymap.del, "n", m.lhs, { buffer = r.buf })
-    end
-  end
-  for _, m in ipairs(r.saved_maps) do
-    if not m.unmap then
-      vim.api.nvim_buf_call(r.buf, function()
-        vim.fn.mapset(m)
-      end)
-    end
-  end
-end
-
----Shows the review keys in the bottom right corner of the window that shows
----the file under review, or hides them when no window shows it.
----@param r leader_k.Review
-local function show_hint(r)
-  local win = window_for(r.buf)
-  if not win then
-    hint.hide(M.hint)
-    return
-  end
-  local keys = config.options.keys
-  local list = r.stale and { { keys.reject, "reject" } } or { { keys.accept, "accept" }, { keys.reject, "reject" } }
-  if r.position then
-    list[#list + 1] = { keys.next_file, "next file" }
-  end
-  if #r.change.hunks > 1 and not r.stale then
-    list[#list + 1] = { keys.next_hunk, "next change" }
-  end
-  local width = vim.api.nvim_win_get_width(win)
-  hint.show(M.hint, list, {
-    relative = "win",
-    win = win,
-    anchor = "SE",
-    row = vim.api.nvim_win_get_height(win),
-    col = width,
-  }, r.position and (r.position .. " " .. r.change.rel) or r.change.rel, width)
-end
-
----Ends the review: clears the diff, the hint, and restores the keys.
+---Ends the review and clears the diff.
 function M.hide()
-  hint.hide(M.hint)
   local r = M.current
   if not r then
     return
@@ -522,7 +388,6 @@ function M.hide()
   M.current = nil
   pcall(vim.api.nvim_del_augroup_by_id, r.augroup)
   M.clear(r.buf)
-  restore_maps(r)
 end
 
 ---Loads the change's file into a buffer without reading it into a window.
@@ -546,38 +411,22 @@ end
 ---Shows `c` in `win` for review.
 ---@param win integer
 ---@param c leader_k.Change
----@param actions leader_k.ReviewActions
----@param focus boolean|nil Move the cursor into `win`.
----@param position string|nil Such as "2/3".
-function M.show(win, c, actions, focus, position)
+function M.show(win, c)
   M.hide()
   local buf = load(c)
   if vim.api.nvim_win_get_buf(win) ~= buf then
     vim.api.nvim_win_set_buf(win, buf)
   end
-  local r = { change = c, buf = buf, saved_maps = {}, position = position } ---@type leader_k.Review
+  local r = { change = c, buf = buf } ---@type leader_k.Review
   r.augroup = vim.api.nvim_create_augroup("leader-k.review", { clear = true })
   M.current = r
-  install_maps(r, actions)
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = r.augroup,
     buffer = buf,
     callback = function()
       if M.current == r then
         draw(r)
-        show_hint(r)
       end
-    end,
-  })
-  -- The hint follows the file between windows.
-  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufWinLeave", "WinResized", "WinClosed" }, {
-    group = r.augroup,
-    callback = function()
-      vim.schedule(function()
-        if M.current == r then
-          show_hint(r)
-        end
-      end)
     end,
   })
   vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
@@ -591,17 +440,12 @@ function M.show(win, c, actions, focus, position)
   })
   draw(r)
   show_line(r, win, M.hunk_lines(c)[1] or 1)
-  show_hint(r)
-  if focus then
-    vim.api.nvim_set_current_win(win)
-  end
 end
 
 ---Redraws the current review, as after the window is resized.
 function M.redraw()
   if M.current then
     draw(M.current)
-    show_hint(M.current)
   end
 end
 

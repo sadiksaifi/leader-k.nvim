@@ -91,7 +91,7 @@ opts = {
 Enter. With nothing attached, the first message sends the current file.
 
 To send other code, select it while the sidebar is open. A hint above the
-selection names the attach key, `<leader>k`. Repeat this in any buffer to
+selection names the attach key, `<C-l>`. Repeat this in any buffer to
 collect several selections. `:LeaderKAdd [path]` attaches a whole file, and
 `@path` in a message attaches that file. The attachments show above the
 input until you send them.
@@ -99,29 +99,31 @@ input until you send them.
 The model reads, lists, and searches files under the project root, the
 nearest directory with `.git`. It proposes edits to any of those files.
 Nothing changes until you accept: the first changed file opens in the code
-with the edit shown inline, and a hint in the window's bottom right corner
-names the review keys. Accepting writes the edit into the buffer, unsaved;
-save it with `:w`. `u` undoes it.
+with the edit shown inline, and the cursor moves to the transcript. The
+review keys work there, and the row under the input names them. Accepting
+writes the edit into the buffer, unsaved; save it with `:w`. `u` undoes it.
 
-The attach and review keys exist only while the sidebar is open. Elsewhere
-these keys keep their usual meaning, including your own mappings. Closing
-the sidebar pauses the review; opening it again resumes it.
+The code buffer keeps its own keys during a review. The attach key exists
+only while the sidebar is open; elsewhere `<C-l>` keeps its usual meaning,
+including your own mapping. Closing the sidebar pauses the review; opening
+it again resumes it.
 
 | Context | Key | Action |
 | --- | --- | --- |
 | Normal | `<leader>k` | Open the sidebar, or move into its input |
-| Visual, sidebar open | `<leader>k` | Attach the selection |
+| Visual, sidebar open | `<C-l>` | Attach the selection |
 | Input | `<CR>` | Send |
 | Input | `<Up>` / `<Down>` | Recall messages |
 | Input, empty | `<BS>` | Remove the newest attachment |
-| Input, empty | `<Esc>` | Back to the code |
+| Input, empty | `<Esc>` | To the transcript while files wait for review, else back to the code |
 | Sidebar | `<C-c>` | Stop the reply |
 | Sidebar | `q` | Close and end the conversation |
-| Review | `<CR>` / `<BS>` | Accept / reject the file |
-| Review | `]f` / `[f` | Next / previous changed file |
-| Review | `]c` / `[c` | Next / previous change in the file |
+| Transcript | `a` / `r` | Accept / reject the file under review |
+| Transcript | `]f` / `[f` | Next / previous changed file |
+| Transcript | `]c` / `[c` | Next / previous change in the file |
 | Transcript | `<CR>` on a file | Review that file |
 | Transcript | `A` / `R` | Accept / reject every pending file |
+| Transcript | `<leader>k` / `i` | Move into the input |
 
 `:LeaderK [request]` opens the sidebar and sends the request, with the range
 attached when one is given. `:LeaderKNew` starts over. Closing the sidebar

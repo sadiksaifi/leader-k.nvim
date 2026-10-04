@@ -1,15 +1,15 @@
 local M = {}
 
 ---@class leader_k.Keys
----@field accept string Accept the file under review.
----@field reject string Reject the file under review.
+---@field accept string In the panel transcript: accept the file under review.
+---@field reject string In the panel transcript: reject the file under review.
 ---@field cancel string Stop a running request.
 ---@field refine string Move into the panel input.
 ---@field attach string In Visual mode, while the panel is open: attach the selection.
----@field next_file string
----@field prev_file string
----@field next_hunk string
----@field prev_hunk string
+---@field next_file string In the panel transcript.
+---@field prev_file string In the panel transcript.
+---@field next_hunk string In the panel transcript: move the code window's cursor.
+---@field prev_hunk string In the panel transcript: move the code window's cursor.
 ---@field accept_all string In the panel transcript.
 ---@field reject_all string In the panel transcript.
 
@@ -38,11 +38,11 @@ M.defaults = {
   timeout_ms = 180000,
   libcurl = nil,
   keys = {
-    accept = "<CR>",
-    reject = "<BS>",
+    accept = "a",
+    reject = "r",
     cancel = "<C-c>",
     refine = "<leader>k",
-    attach = "<leader>k",
+    attach = "<C-l>",
     next_file = "]f",
     prev_file = "[f",
     next_hunk = "]c",

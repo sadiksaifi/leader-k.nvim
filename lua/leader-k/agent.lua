@@ -204,45 +204,25 @@ local function fill_results(text)
   end
 end
 
----Shows `c` in the code window for review.
+---Shows `c` in the code window for review. The cursor stays where it is;
+---the review keys are in the panel.
 ---@param c leader_k.Change
----@param focus boolean|nil
-function M.review(c, focus)
+function M.review(c)
   if not S or c.status ~= "pending" then
     return
   end
-  -- Review keys work only with the panel open; wait for it.
+  -- The review keys live in the panel; wait for it to open.
   if not panel().is_open(S) then
     S.resume = c
     return
   end
   S.resume = nil
-  local pending = S.changes:pending()
-  local position
-  for i, x in ipairs(pending) do
-    if x == c and #pending > 1 then
-      position = ("%d/%d"):format(i, #pending)
-    end
-  end
   local win = panel().code_window(S)
   if not win then
     return
   end
   S.origin_win = win
-  local ok, err = pcall(review.show, win, c, {
-    accept = function()
-      M.decide(c, "accepted")
-    end,
-    reject = function()
-      M.decide(c, "rejected")
-    end,
-    next_file = function()
-      M.step_file(1)
-    end,
-    prev_file = function()
-      M.step_file(-1)
-    end,
-  }, focus, position)
+  local ok, err = pcall(review.show, win, c)
   if not ok then
     echo_error(tostring(err))
   end
@@ -267,7 +247,7 @@ function M.step_file(dir)
   for k = 1, #list do
     local i = ((at - 1 + dir * k) % #list) + 1
     if list[i].status == "pending" and list[i] ~= cur then
-      M.review(list[i], true)
+      M.review(list[i])
       return
     end
   end
@@ -297,7 +277,7 @@ function M.decide(c, status, quiet)
     if err then
       warn(err)
       if was_current then
-        M.review(c, false)
+        M.review(c)
       end
       return false
     end
@@ -320,7 +300,7 @@ function M.decide(c, status, quiet)
       end
     end
     if nxt then
-      M.review(nxt, true)
+      M.review(nxt)
       return true
     end
   end
@@ -487,7 +467,8 @@ step = function(run)
   S.cancel = cancel
 end
 
----Ends a run. Opens the first file the run changed for review.
+---Ends a run. Opens the first file the run changed for review, and moves
+---focus from an empty input to the transcript, where the review keys work.
 finish = function()
   if not S then
     return
@@ -502,7 +483,10 @@ finish = function()
   S.cancel, S.tool_cancel = nil, nil
   stop_timer()
   if first and not review.current then
-    M.review(first, false)
+    M.review(first)
+    if review.current and panel().input_idle(S) then
+      panel().focus_transcript(S)
+    end
   else
     sync()
   end
@@ -910,9 +894,9 @@ function M.new()
   end
 end
 
----Called when the panel's windows open or close. The attach key and the
----review keys exist only while they are open; a review in progress
----resumes when they open again.
+---Called when the panel's windows open or close. The attach key exists
+---only while they are open. Closing them pauses the review in progress;
+---opening them resumes it.
 ---@param conv leader_k.Conversation
 ---@param open boolean
 function M.on_panel(conv, open)
@@ -933,7 +917,7 @@ function M.on_panel(conv, open)
     return panel().owns(conv, win)
   end, M.attach_selection)
   if conv.resume and conv.resume.status == "pending" and not review.current then
-    M.review(conv.resume, false)
+    M.review(conv.resume)
   end
 end
 
