@@ -71,6 +71,19 @@ local function show_hint()
   hint.show(M.hint, { { active.lhs, "attach" } }, { relative = "win", win = win, row = row, col = col })
 end
 
+---The global Visual-mode mapping of `lhs`. maparg() would return a
+---buffer-local mapping of the current buffer instead.
+---@param lhs string
+---@return table|nil
+local function global_map(lhs)
+  local raw = vim.keycode(lhs)
+  for _, m in ipairs(vim.api.nvim_get_keymap("x")) do
+    if m.lhsraw == raw or m.lhsrawalt == raw then
+      return m
+    end
+  end
+end
+
 ---Maps the attach key in Visual mode until disable().
 ---@param owns fun(win: integer): boolean
 ---@param attach fun(buf: integer, r0: integer, r1: integer, focus: integer[][]|nil)
@@ -79,10 +92,7 @@ function M.enable(owns, attach)
     return
   end
   local lhs = config.options.keys.attach
-  local saved = vim.fn.maparg(lhs, "x", false, true)
-  if vim.tbl_isempty(saved) or saved.buffer == 1 then
-    saved = nil
-  end
+  local saved = global_map(lhs)
   active = { lhs = lhs, saved = saved, owns = owns, attach = attach }
   vim.keymap.set("x", lhs, function()
     if not selectable(vim.api.nvim_get_current_win()) then

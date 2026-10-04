@@ -15,6 +15,7 @@ local BAR = "▎"
 ---@class leader_k.Review
 ---@field change leader_k.Change
 ---@field buf integer
+---@field win integer The window the review opened in.
 ---@field augroup integer
 ---@field stale boolean|nil
 
@@ -349,8 +350,20 @@ end
 ---@param step integer 1 or -1.
 function M.jump_hunk(step)
   local r = M.current
-  local win = r and window_for(r.buf)
-  if not (r and win) then
+  if not r then
+    return
+  end
+  local win = r.win
+  if not (vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == r.buf) then
+    -- Another window of the current tab that shows the file.
+    win = nil
+    for _, w in ipairs(vim.fn.win_findbuf(r.buf)) do
+      if vim.api.nvim_win_get_tabpage(w) == vim.api.nvim_get_current_tabpage() then
+        win = win or w
+      end
+    end
+  end
+  if not win then
     return
   end
   local lines = M.hunk_lines(r.change)
@@ -417,7 +430,7 @@ function M.show(win, c)
   if vim.api.nvim_win_get_buf(win) ~= buf then
     vim.api.nvim_win_set_buf(win, buf)
   end
-  local r = { change = c, buf = buf } ---@type leader_k.Review
+  local r = { change = c, buf = buf, win = win } ---@type leader_k.Review
   r.augroup = vim.api.nvim_create_augroup("leader-k.review", { clear = true })
   M.current = r
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
