@@ -133,6 +133,7 @@ local function teardown()
     agent.close()
   end
   review.hide()
+  vim.cmd("silent! tabonly!")
   vim.cmd("silent! only!")
   vim.cmd("enew!")
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
