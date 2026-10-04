@@ -71,7 +71,7 @@ local function reset_files()
   local f = assert(io.open(project .. "/image.bin", "wb"))
   f:write("PNG\0\1\2binary")
   f:close()
-  for _, extra in ipairs({ "new.lua", "src/deep/new.lua" }) do
+  for _, extra in ipairs({ "new.lua", "src/deep/new.lua", "src/package.json", "src/secret.txt", "link.lua" }) do
     vim.fn.delete(project .. "/" .. extra)
   end
 end
@@ -902,6 +902,162 @@ test(":LeaderK with a range attaches it and sends the request", function()
   local user = requests()[1].messages[2].content
   has(user, '<attachment path="a.lua" lines="3-4">\nfunction M.total(items)\n  local sum = 0\n</attachment>')
   has(user, "explain")
+end)
+
+test("a dangling symlink to a file outside the project is refused", function()
+  local outside = vim.fn.tempname() .. "-lk-outside/missing.lua"
+  vim.uv.fs_symlink(outside, project .. "/link.lua")
+  script({
+    { tool_calls = { { name = "create_file", arguments = { path = "link.lua", content = "x" } } } },
+    { content = "ok" },
+  })
+  use("script")
+  edit("a.lua")
+  send("create")
+  wait_idle()
+  has(tool_results(requests()[2])["call_0_0"], "Error: link.lua is outside the project root")
+  eq(#agent.get().changes.list, 0)
+end)
+
+test("search never returns files git ignores, even through a glob", function()
+  script({
+    {
+      tool_calls = {
+        { name = "search", arguments = { pattern = "hunter2", glob = "*.txt" } },
+        { name = "search", arguments = { pattern = "hunter2" } },
+      },
+    },
+    { content = "ok" },
+  })
+  use("script")
+  edit("a.lua")
+  send("find it")
+  wait_idle()
+  local r = tool_results(requests()[2])
+  eq(r["call_0_0"], "No matches.")
+  eq(r["call_0_1"], "No matches.")
+end)
+
+test("a project root below the git repository still applies .gitignore", function()
+  vim.fn.writefile({ "{}" }, project .. "/src/package.json")
+  vim.fn.writefile({ "hunter2" }, project .. "/src/secret.txt")
+  script({
+    {
+      tool_calls = {
+        { name = "read_file", arguments = { path = "secret.txt" } },
+        { name = "list_files", arguments = {} },
+      },
+    },
+    { content = "ok" },
+  })
+  use("script", { root_markers = { "package.json" } })
+  edit("src/util.lua")
+  send("read")
+  wait_idle()
+  eq(agent.get().root, project .. "/src")
+  local r = tool_results(requests()[2])
+  eq(r["call_0_0"], "Error: secret.txt is ignored by git")
+  eq(vim.split(r["call_0_1"], "\n"), { "package.json", "util.lua" })
+end)
+
+test("a later edit to the file under review redraws it", function()
+  script({
+    {
+      tool_calls = {
+        { name = "edit_file", arguments = { path = "a.lua", old_string = "return sum", new_string = "return first" } },
+      },
+    },
+    { content = "First." },
+    {
+      tool_calls = {
+        {
+          name = "edit_file",
+          arguments = { path = "a.lua", old_string = "return first", new_string = "return second" },
+        },
+      },
+    },
+    { content = "Second." },
+  })
+  use("script")
+  local a = edit("a.lua")
+  send("one")
+  wait_idle()
+  eq(review.current.change.rel, "a.lua")
+  agent.submit("two")
+  wait_idle()
+  local shown = {}
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(a, review.ns, 0, -1, { details = true })) do
+    for _, l in ipairs(m[4].virt_lines or {}) do
+      shown[#shown + 1] = vim.trim(table.concat(vim.tbl_map(function(c)
+        return c[1]
+      end, l)))
+    end
+  end
+  eq(shown, { "return second" })
+  vim.api.nvim_set_current_win(code_win())
+  feed("<CR>")
+  eq(lines_of(a)[8], "  return second")
+end)
+
+test("accept refuses text that autocommands changed while loading the file", function()
+  script(EDITS)
+  use("script")
+  edit("a.lua")
+  send("annotate")
+  wait_idle()
+  local S = assert(agent.get())
+  local c = S.changes.list[2]
+  eq(c.rel, "b.lua")
+  eq(vim.fn.bufnr(project .. "/b.lua"), -1, "b.lua is not loaded yet")
+  local au = vim.api.nvim_create_autocmd("BufReadPost", {
+    pattern = "*/b.lua",
+    callback = function(ev)
+      vim.api.nvim_buf_set_lines(ev.buf, 0, 1, false, { "-- from an autocommand" })
+    end,
+  })
+  agent.decide_all("accepted")
+  vim.api.nvim_del_autocmd(au)
+  eq(c.status, "pending")
+  local b = vim.fn.bufnr(project .. "/b.lua")
+  eq(lines_of(b)[1], "-- from an autocommand")
+  eq(lines_of(b)[4], '  return "b"')
+end)
+
+test("a rejected new file can be proposed again", function()
+  script({
+    { tool_calls = { { name = "create_file", arguments = { path = "new.lua", content = "one\n" } } } },
+    { content = "ok" },
+    { tool_calls = { { name = "create_file", arguments = { path = "new.lua", content = "two\n" } } } },
+    { content = "ok" },
+  })
+  use("script")
+  edit("a.lua")
+  send("create")
+  wait_idle()
+  eq(review.current.change.rel, "new.lua")
+  vim.api.nvim_set_current_win(code_win())
+  feed("<BS>")
+  eq(vim.fn.bufnr(project .. "/new.lua"), -1, "the empty review buffer is gone")
+  agent.submit("again")
+  wait_idle()
+  local reqs = requests()
+  has(tool_results(reqs[#reqs])["call_2_0"], "Staged the new file new.lua")
+end)
+
+test("a reply streaming in does not reopen a closed panel", function()
+  script({ { content = "A slow reply that keeps streaming.", delay = 0.05, piece = 2 } })
+  use("script")
+  edit("a.lua")
+  send("slow")
+  local S = assert(agent.get())
+  vim.api.nvim_win_close(S.panel.twin, true)
+  vim.wait(50)
+  wait_idle()
+  eq(require("leader-k.panel").is_open(S), false)
+  eq(#vim.api.nvim_tabpage_list_wins(0), 1)
+  lk.open()
+  vim.cmd.stopinsert()
+  has(transcript(), "A slow reply that keeps streaming.")
 end)
 
 test("HTTP 401 goes to the message area and the transcript", function()

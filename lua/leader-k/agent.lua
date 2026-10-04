@@ -67,10 +67,13 @@ local function panel()
   return require("leader-k.panel")
 end
 
-local function sync()
+---Redraws the panel. It opens the panel's windows only when `show` is set,
+---so a reply streaming in does not reopen a panel the user closed.
+---@param show boolean|nil
+local function sync(show)
   if S then
     S.dirty = false
-    panel().sync(S)
+    panel().sync(S, show)
   end
 end
 
@@ -268,7 +271,14 @@ function M.decide(c, status, quiet)
     review.hide()
   end
   if status == "accepted" then
-    local _, err = S.changes:accept(c)
+    -- The file system may have changed since the edit was staged.
+    local abs, resolve_err = root.resolve(S.root, c.rel)
+    local err
+    if abs ~= c.path then
+      err = abs and ("%s now resolves to another file"):format(c.rel) or resolve_err
+    else
+      err = select(2, S.changes:accept(c))
+    end
     if err then
       warn(err)
       if was_current then
@@ -367,6 +377,8 @@ local function run_calls(run, calls, i)
     elseif result:sub(1, 7) == "Error: " then
       add_item("note", ("%s failed: %s"):format(call["function"].name, result:sub(8)))
     end
+    -- An edit to the file under review shows at once.
+    review.redraw()
     -- The next call starts on a fresh stack, so a quick tool cannot nest.
     vim.schedule(function()
       run_calls(run, calls, i + 1)
@@ -610,6 +622,8 @@ function M.submit(text)
     context.free(a)
   end
   S.attachments, S.decisions = {}, {}
+  -- Files may have been created since the last completion.
+  S.files = nil
   draw_attachments()
   S.messages[#S.messages + 1] = { role = "user", content = table.concat(parts, "\n\n") }
   S.items[#S.items + 1] = { kind = "user", text = text, labels = labels }
@@ -695,6 +709,9 @@ local function destroy()
     M.stop()
   end
   review.hide()
+  for _, c in ipairs(conv.changes:pending()) do
+    changes.drop_placeholder(c)
+  end
   for _, a in ipairs(conv.attachments) do
     context.free(a)
   end
@@ -802,7 +819,7 @@ function M.open()
   if not fresh then
     note_origin()
   end
-  sync()
+  sync(true)
   panel().focus_input(S)
 end
 
@@ -815,7 +832,7 @@ function M.attach_selection(buf, r0, r1, focus)
   ensure()
   note_origin()
   add_attachment(context.selection(buf, r0, r1, focus))
-  sync()
+  sync(true)
 end
 
 ---Attaches a whole file.
@@ -835,7 +852,7 @@ function M.attach_file(path)
   ensure()
   note_origin()
   add_attachment(context.file(abs))
-  sync()
+  sync(true)
 end
 
 ---Closes the panel and ends the conversation. With pending changes, asks

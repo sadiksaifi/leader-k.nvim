@@ -178,6 +178,10 @@ function Changes:accept(c)
   local buf = vim.fn.bufadd(vim.fn.fnamemodify(c.path, ":~:."))
   vim.fn.bufload(buf)
   vim.bo[buf].buflisted = true
+  -- Loading runs autocommands that may change the text; check what loaded.
+  if not M.same(M.normalize(vim.api.nvim_buf_get_lines(buf, 0, -1, false)), c.original) then
+    return nil, ("%s changed since the edit. Reject it, or ask again."):format(c.rel)
+  end
   if not vim.bo[buf].modifiable then
     return nil, ("%s is not modifiable"):format(c.rel)
   end
@@ -200,7 +204,35 @@ end
 function Changes:reject(c)
   if c.status == "pending" then
     c.status = "rejected"
+    M.drop_placeholder(c)
   end
+end
+
+---Deletes the empty buffer that reviewing a proposed new file left, so the
+---file can be proposed again. A buffer the user changed stays.
+---@param c leader_k.Change
+function M.drop_placeholder(c)
+  local buf = M.loaded_buf(c.path)
+  if
+    not c.new
+    or not buf
+    or vim.bo[buf].modified
+    or vim.uv.fs_stat(c.path)
+    or #M.normalize(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) > 0
+  then
+    return
+  end
+  -- Windows that show it switch to another buffer instead of closing.
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    local alt = vim.api.nvim_win_call(win, function()
+      return vim.fn.bufnr("#")
+    end)
+    if alt == -1 or alt == buf or not vim.api.nvim_buf_is_valid(alt) then
+      alt = vim.api.nvim_create_buf(true, false)
+    end
+    pcall(vim.api.nvim_win_set_buf, win, alt)
+  end
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
 end
 
 return M

@@ -292,7 +292,19 @@ local function search(ctx, args, done)
   local glob = type(args.glob) == "string" and args.glob ~= "" and args.glob or nil
   local cmd
   if vim.fn.executable("rg") == 1 then
-    cmd = { "rg", "--line-number", "--no-heading", "--color", "never", "--max-count", "50", "--max-columns", "300" }
+    cmd = {
+      "rg",
+      "--line-number",
+      "--with-filename",
+      "--null",
+      "--no-heading",
+      "--color",
+      "never",
+      "--max-count",
+      "50",
+      "--max-columns",
+      "300",
+    }
     if glob then
       vim.list_extend(cmd, { "--glob", glob })
     end
@@ -302,6 +314,7 @@ local function search(ctx, args, done)
       "git",
       "grep",
       "-n",
+      "-z",
       "-I",
       "--untracked",
       "-E",
@@ -322,10 +335,27 @@ local function search(ctx, args, done)
     if r.code ~= 0 then
       return done("Error: " .. vim.trim(r.stderr ~= "" and r.stderr or ("search exited with " .. r.code)))
     end
-    local hits = vim.split(r.stdout or "", "\n", { plain = true, trimempty = true })
+    -- Each match is `path NUL line (NUL or :) text`, so any path parses.
+    local hits, paths = {}, {}
+    for _, line in ipairs(vim.split(r.stdout or "", "\n", { plain = true, trimempty = true })) do
+      local path, lnum, text = line:match("^(.-)%z(%d+)[:%z](.*)$")
+      if path then
+        path = path:gsub("^%./", "")
+        hits[#hits + 1] = { path, lnum, text }
+        paths[path] = true
+      end
+    end
+    -- A glob can make rg search files git ignores; the policy still holds.
+    local ignored = root.ignored_set(ctx.root, vim.tbl_keys(paths))
+    hits = vim.tbl_filter(function(h)
+      return not ignored[h[1]] and not ("/" .. h[1] .. "/"):find("/.git/", 1, true)
+    end, hits)
+    if #hits == 0 then
+      return done("No matches.", ('Searched "%s": no matches'):format(shown))
+    end
     local out = {}
     for i = 1, math.min(#hits, MAX_MATCHES) do
-      local h = hits[i]:gsub("^%./", "")
+      local h = ("%s:%s:%s"):format(hits[i][1], hits[i][2], hits[i][3])
       out[i] = #h > MAX_LINE + 40 and (h:sub(1, MAX_LINE + 40) .. " [...]") or h
     end
     local text = table.concat(out, "\n")

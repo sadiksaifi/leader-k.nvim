@@ -25,6 +25,7 @@ local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 ---@field file_rows table<integer, leader_k.Change> 1-based transcript rows of the changed-files list.
 ---@field shown integer|nil Items when the view last scrolled to the latest message.
 ---@field augroup integer|nil
+---@field visible boolean|nil The user wants the windows open.
 
 -- Rows (1-based) of the user's messages, per transcript buffer, for the column.
 ---@type table<integer, table<integer, true>>
@@ -567,7 +568,7 @@ function M.close(S)
     return
   end
   local wins = vim.tbl_filter(valid, { p.twin, p.iwin })
-  p.twin, p.iwin = nil, nil
+  p.twin, p.iwin, p.visible = nil, nil, false
   if p.augroup then
     pcall(vim.api.nvim_del_augroup_by_id, p.augroup)
     p.augroup = nil
@@ -619,10 +620,15 @@ function M.tick(S)
   end
 end
 
----Opens or updates the panel to match the conversation.
+---Updates the panel to match the conversation, and opens its windows when
+---`show` is set or they are already meant to be open.
 ---@param S leader_k.Conversation
-function M.sync(S)
+---@param show boolean|nil
+function M.sync(S, show)
   local p = state(S)
+  if show then
+    p.visible = true
+  end
   if not (p.tbuf and vim.api.nvim_buf_is_valid(p.tbuf)) then
     p.tbuf, p.joined = create_transcript(S), nil
   end
@@ -660,6 +666,9 @@ function M.sync(S)
   end
 
   if not valid(p.twin) then
+    if not p.visible then
+      return
+    end
     open_windows(S)
   end
   local twin = p.twin --[[@as integer]]

@@ -16,16 +16,25 @@ function M.find(start)
   return vim.fs.normalize(found or cwd)
 end
 
----Resolves symlinks in the deepest part of `path` that exists.
+---Resolves every symlink in `path`, including dangling ones, so a link
+---to a missing file outside the root cannot pass for a path inside it.
 ---@param path string Absolute, normalized.
+---@param depth integer|nil
 ---@return string
-local function realpath(path)
+local function realpath(path, depth)
+  depth = depth or 0
   local rest = {}
   local p = path
   while true do
     local real = vim.uv.fs_realpath(p)
     if real then
       return vim.fs.joinpath(real, unpack(rest))
+    end
+    local link = vim.uv.fs_readlink(p)
+    if link and depth < 40 then
+      -- A dangling link: follow its target instead of trusting its parent.
+      local target = link:sub(1, 1) == "/" and link or vim.fs.joinpath(vim.fs.dirname(p), link)
+      return realpath(vim.fs.normalize(vim.fs.joinpath(target, unpack(rest))), depth + 1)
     end
     local parent = vim.fs.dirname(p)
     if parent == p then
@@ -36,22 +45,38 @@ local function realpath(path)
   end
 end
 
+---Whether `root` is inside a git work tree. The repository may start above
+---the root, as when `root_markers` names a file in a subdirectory.
 ---@param root string
 ---@return boolean
 local function has_git(root)
-  return vim.fn.executable("git") == 1 and vim.uv.fs_stat(vim.fs.joinpath(root, ".git")) ~= nil
+  return vim.fn.executable("git") == 1 and vim.fs.root(root, ".git") ~= nil
 end
 M.has_git = has_git
+
+---The paths of `rels` (relative to `root`) that git ignores.
+---@param root string
+---@param rels string[]
+---@return table<string, true>
+function M.ignored_set(root, rels)
+  local out = {}
+  if #rels == 0 or not has_git(root) then
+    return out
+  end
+  local r = vim
+    .system({ "git", "check-ignore", "--stdin", "-z" }, { cwd = root, text = true, stdin = table.concat(rels, "\0") .. "\0" })
+    :wait(5000)
+  for _, rel in ipairs(vim.split(r.stdout or "", "\0", { plain = true, trimempty = true })) do
+    out[rel] = true
+  end
+  return out
+end
 
 ---@param root string
 ---@param rel string
 ---@return boolean
 local function ignored(root, rel)
-  if not has_git(root) then
-    return false
-  end
-  local r = vim.system({ "git", "check-ignore", "-q", "--", rel }, { cwd = root, text = true }):wait(5000)
-  return r.code == 0
+  return M.ignored_set(root, { rel })[rel] == true
 end
 
 ---Resolves `path`, relative to `root` unless absolute, for a tool.
