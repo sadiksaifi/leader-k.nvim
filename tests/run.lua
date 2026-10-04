@@ -72,7 +72,7 @@ local function reset_files()
   local f = assert(io.open(project .. "/image.bin", "wb"))
   f:write("PNG\0\1\2binary")
   f:close()
-  for _, extra in ipairs({ "new.lua", "src/deep/new.lua", "src/package.json", "src/secret.txt", "link.lua" }) do
+  for _, extra in ipairs({ "new.lua", "src/deep/new.lua", "src/package.json", "src/secret.txt", "link.lua", "long.lua" }) do
     vim.fn.delete(project .. "/" .. extra)
   end
 end
@@ -338,6 +338,51 @@ test("read_file reads a line range and stops at max_read_bytes", function()
   has(capped, "a.lua, lines 1-3 of 11:")
   has(capped, "[Stopped at 60 bytes. Read on with start_line=4.]")
   has(transcript(), "Read a.lua, lines 3-4")
+end)
+
+test("read_file refuses a first line longer than max_read_bytes", function()
+  vim.fn.writefile({ string.rep("x", 200), "short" }, project .. "/long.lua")
+  script({ { tool_calls = { { name = "read_file", arguments = { path = "long.lua" } } } }, { content = "ok" } })
+  use("script", { max_read_bytes = 32 })
+  edit("a.lua")
+  send("read")
+  wait_idle()
+  eq(
+    tool_results(requests()[2])["call_0_0"],
+    "Error: line 1 of long.lua is 200 bytes, more than the read limit of 32 bytes."
+  )
+end)
+
+test("read_file matches a loaded buffer by its exact name", function()
+  -- bufnr() would take zz.lua as a pattern and find zz.lua.bak.
+  local bak = vim.fn.bufadd(project .. "/zz.lua.bak")
+  vim.fn.bufload(bak)
+  vim.api.nvim_buf_set_lines(bak, 0, -1, false, { "BACKUP" })
+  script({ { tool_calls = { { name = "read_file", arguments = { path = "zz.lua" } } } }, { content = "ok" } })
+  use("script")
+  edit("a.lua")
+  send("read")
+  wait_idle()
+  eq(tool_results(requests()[2])["call_0_0"], "Error: zz.lua does not exist.")
+end)
+
+test("a loaded binary file is still refused", function()
+  vim.cmd("silent edit " .. project .. "/image.bin")
+  script({
+    {
+      tool_calls = {
+        { name = "read_file", arguments = { path = "image.bin" } },
+        { name = "edit_file", arguments = { path = "image.bin", old_string = "PNG", new_string = "GIF" } },
+      },
+    },
+    { content = "ok" },
+  })
+  use("script")
+  send("read")
+  wait_idle()
+  local r = tool_results(requests()[2])
+  eq(r["call_0_0"], "Error: image.bin is a binary file.")
+  eq(r["call_0_1"], "Error: image.bin is a binary file.")
 end)
 
 test("read_file sees unsaved buffer text", function()
@@ -677,6 +722,44 @@ test("a buffer-local attach key does not hide the global one it shadows", functi
   vim.keymap.del("x", "<leader>a", { buffer = a })
   eq(vim.fn.maparg("<leader>a", "x"), "<Cmd>let g:lk_global = 1<CR>", "the global map is restored")
   vim.keymap.del("x", "<leader>a")
+end)
+
+test("closing the panel removes the attach key it set after mapleader changed", function()
+  use("script")
+  edit("a.lua")
+  agent.open()
+  vim.cmd.stopinsert()
+  vim.g.mapleader = ","
+  vim.keymap.set("x", ",a", "<Cmd>let g:lk_comma = 1<CR>")
+  agent.hide()
+  vim.g.mapleader = " "
+  eq(vim.fn.maparg(",a", "x"), "<Cmd>let g:lk_comma = 1<CR>", "the user's ,a stays")
+  eq(vim.fn.maparg("<Space>a", "x"), "", "the panel's <Space>a is gone")
+  vim.keymap.del("x", ",a")
+end)
+
+test("a reply that finishes in another tab page reviews on return", function()
+  script({
+    {
+      delay = 0.1,
+      tool_calls = {
+        { name = "edit_file", arguments = { path = "a.lua", old_string = "return M", new_string = "return M -- x" } },
+      },
+    },
+    { content = "Done." },
+  })
+  use("script")
+  edit("a.lua")
+  send("go")
+  local tab = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabnew")
+  local b = edit("b.lua")
+  local other = vim.api.nvim_get_current_win()
+  wait_idle()
+  eq(vim.api.nvim_win_get_buf(other), b, "the other tab keeps its buffer")
+  eq(review.current, nil)
+  vim.api.nvim_set_current_tabpage(tab)
+  eq(review.current and review.current.change.rel, "a.lua", "the review opens on return")
 end)
 
 test("closing the panel suspends the review; opening it resumes", function()

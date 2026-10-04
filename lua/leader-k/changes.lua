@@ -61,9 +61,14 @@ end
 ---@param path string
 ---@return integer|nil
 function M.loaded_buf(path)
-  local buf = vim.fn.bufnr(path)
-  if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then
-    return buf
+  -- bufnr() would match `path` as a pattern, such as a.lua against a.lua.bak.
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name == path or (name ~= "" and vim.uv.fs_realpath(name) == path) then
+        return buf
+      end
+    end
   end
 end
 

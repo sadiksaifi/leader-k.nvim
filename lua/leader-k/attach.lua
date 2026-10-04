@@ -9,6 +9,8 @@ local M = {}
 
 ---@class leader_k.AttachState
 ---@field lhs string
+---@field raw string The key as typed when the map was set.
+---@field callback function The mapping's callback.
 ---@field saved table|nil The shadowed global Visual-mode mapping.
 ---@field augroup integer
 ---@field owns fun(win: integer): boolean Whether `win` belongs to the panel.
@@ -71,12 +73,11 @@ local function show_hint()
   hint.show(M.hint, { { active.lhs, "attach" } }, { relative = "win", win = win, row = row, col = col })
 end
 
----The global Visual-mode mapping of `lhs`. maparg() would return a
----buffer-local mapping of the current buffer instead.
----@param lhs string
+---The global Visual-mode mapping of the keys `raw`. maparg() would return
+---a buffer-local mapping of the current buffer instead.
+---@param raw string Keys as typed, such as from vim.keycode().
 ---@return table|nil
-local function global_map(lhs)
-  local raw = vim.keycode(lhs)
+local function global_map(raw)
   for _, m in ipairs(vim.api.nvim_get_keymap("x")) do
     if m.lhsraw == raw or m.lhsrawalt == raw then
       return m
@@ -92,9 +93,10 @@ function M.enable(owns, attach)
     return
   end
   local lhs = config.options.keys.attach
-  local saved = global_map(lhs)
-  active = { lhs = lhs, saved = saved, owns = owns, attach = attach }
-  vim.keymap.set("x", lhs, function()
+  -- The key as typed now: a later change of mapleader does not move it.
+  local raw = vim.keycode(lhs)
+  local saved = global_map(raw)
+  local function callback()
     if not selectable(vim.api.nvim_get_current_win()) then
       vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
       return
@@ -102,7 +104,9 @@ function M.enable(owns, attach)
     hint.hide(M.hint)
     local buf, r0, r1, focus = require("leader-k.context").visual()
     active.attach(buf, r0, r1, focus)
-  end, { silent = true, desc = "leader-k: attach the selection" })
+  end
+  active = { lhs = lhs, raw = raw, callback = callback, saved = saved, owns = owns, attach = attach }
+  vim.keymap.set("x", lhs, callback, { silent = true, desc = "leader-k: attach the selection" })
   active.augroup = vim.api.nvim_create_augroup("leader-k.attach", { clear = true })
   vim.api.nvim_create_autocmd("ModeChanged", {
     group = active.augroup,
@@ -137,7 +141,13 @@ function M.disable()
   active = nil
   hint.hide(M.hint)
   pcall(vim.api.nvim_del_augroup_by_id, a.augroup)
-  pcall(vim.keymap.del, "x", a.lhs)
+  -- A mapping the user put on the key meanwhile stays, and so does what it
+  -- replaced.
+  local m = global_map(a.raw)
+  if not (m and m.callback == a.callback) then
+    return
+  end
+  vim.api.nvim_del_keymap("x", m.lhs)
   if a.saved then
     vim.fn.mapset("x", false, a.saved)
   end

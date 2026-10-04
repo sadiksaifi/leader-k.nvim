@@ -114,6 +114,19 @@ local function binary(path)
   return head:find("\0", 1, true) ~= nil
 end
 
+---Whether text read from a buffer or with readfile() came from a binary
+---file. Buffers return NUL bytes as "\0"; readfile() turns them into "\n".
+---@param lines string[]
+---@return boolean
+local function has_nul(lines)
+  for _, l in ipairs(lines) do
+    if l:find("\0", 1, true) or l:find("\n", 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
 ---@param ctx leader_k.ToolContext
 ---@param args table
 ---@param done leader_k.ToolDone
@@ -136,6 +149,9 @@ local function read_file(ctx, args, done)
   if not lines then
     return done(("Error: %s cannot be read."):format(rel))
   end
+  if has_nul(lines) then
+    return done(("Error: %s is a binary file."):format(rel))
+  end
   local total = #lines
   if total == 0 then
     return done(("%s is empty."):format(rel), ("Read %s (empty)"):format(tail(rel)))
@@ -153,7 +169,12 @@ local function read_file(ctx, args, done)
   for i = first, last do
     local line = ("%6d\t%s"):format(i, lines[i])
     size = size + #line + 1
-    if size > cap and i > first then
+    if size > cap then
+      if i == first then
+        return done(
+          ("Error: line %d of %s is %d bytes, more than the read limit of %d bytes."):format(i, rel, #lines[i], cap)
+        )
+      end
       shown = i - 1
       break
     end
@@ -405,6 +426,9 @@ local function edit_file(ctx, args, done)
   end
   if not lines then
     return done(("Error: %s cannot be read."):format(rel))
+  end
+  if has_nul(lines) then
+    return done(("Error: %s is a binary file."):format(rel))
   end
   local text = table.concat(lines, "\n")
   local at, n, from = nil, 0, 1

@@ -210,8 +210,10 @@ function M.review(c)
   if not S or c.status ~= "pending" then
     return
   end
-  -- The review keys live in the panel; wait for it to open.
-  if not panel().is_open(S) then
+  -- The review keys live in the panel; wait until it is open in the
+  -- current tab page. A reply can finish while the user is in another one.
+  local twin = S.panel and S.panel.twin
+  if not panel().is_open(S) or vim.api.nvim_win_get_tabpage(twin) ~= vim.api.nvim_get_current_tabpage() then
     S.resume = c
     return
   end
@@ -752,6 +754,14 @@ local function ensure()
         if #conv.items == 0 then
           sync()
         end
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("TabEnter", {
+    group = S.augroup,
+    callback = function()
+      if S == conv and conv.resume and conv.resume.status == "pending" and not review.current then
+        M.review(conv.resume)
       end
     end,
   })
