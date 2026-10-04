@@ -81,6 +81,9 @@ local function selection_block(ctx, full)
   local r0 = ctx.first_row
   local r1 = r0 + math.max(#ctx.selection, 1) - 1
   local where = r0 == r1 and ("line %d"):format(r0) or ("lines %d-%d"):format(r0, r1)
+  if r0 == 1 and r1 == ctx.line_count and not ctx.focus then
+    where = "the whole file"
+  end
   if full then
     local ft = ctx.filetype ~= "" and ctx.filetype or "plain text"
     out[#out + 1] = ("File: %s (%s), %d lines. The selection is %s."):format(ctx.path, ft, ctx.line_count, where)

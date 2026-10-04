@@ -273,7 +273,8 @@ end
 local function describe(t)
   local r0, r1 = region_of(t.buf, t.mark)
   local name = vim.api.nvim_buf_get_name(t.buf)
-  return answer.label(name ~= "" and name or "[unnamed buffer]", r0, r1, t.focus_marks ~= nil)
+  local total = vim.api.nvim_buf_line_count(t.buf)
+  return answer.label(name ~= "" and name or "[unnamed buffer]", r0, r1, t.focus_marks ~= nil, total)
 end
 
 ---@return leader_k.Target
@@ -1009,7 +1010,7 @@ end
 ---@param r0 integer
 ---@param r1 integer
 ---@param instruction string|nil
----@param opts { mode: leader_k.Mode|nil, focus: integer[][]|nil, selection: boolean|nil }|nil `focus`: see new_target(). `selection`: the rows were selected, not just the cursor line.
+---@param opts { mode: leader_k.Mode|nil, focus: integer[][]|nil, selection: boolean|nil, whole: boolean|nil }|nil `focus`: see new_target(). `selection`: the rows were selected, not just the cursor line. `whole`: nothing was selected; r0..r1 is the cursor line, and a new conversation covers the whole file.
 function M.start(r0, r1, instruction, opts)
   opts = opts or {}
   local mode = opts.mode or "auto"
@@ -1057,6 +1058,10 @@ function M.start(r0, r1, instruction, opts)
     if resume then
       r0, r1 = assert(q0), assert(q1)
     end
+  end
+  if opts.whole and not resume then
+    -- Without a selection, the conversation is about the whole file.
+    r0, r1 = 0, vim.api.nvim_buf_line_count(buf) - 1
   end
 
   local self = setmetatable({

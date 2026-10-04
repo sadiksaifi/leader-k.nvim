@@ -10,9 +10,10 @@ REQUIREMENTS                                        *leader-k-requirements*
 USE                                                          *leader-k-use*
 
 Map <leader>k to require("leader-k").open(). In Visual mode it starts on the
-selection; in Normal mode, on the current line. A panel opens on the right
-of the editor with the selection attached and an input for your request.
-Type a request and press Enter. The model decides how to reply:
+selection; in Normal mode, on the whole file, as a side chat. A panel opens
+on the right of the editor with the selection attached and an input for
+your request. Type a request and press Enter. The model decides how to
+reply:
 
   A change      A proposed edit, shown inline as a diff. Accepting applies
                 it to the buffer.
@@ -66,9 +67,10 @@ conversation keeps the mode it started with.
 
                                                             *:LeaderK*
 :[range]LeaderK [request]
-    Start on the range (default: current line); the model decides how to
-    reply. A request is sent at once. During a conversation, the range is
-    attached to the next message instead.
+    Start on the range (default: the whole file); the model decides how to
+    reply. A request is sent at once. During a conversation, a range is
+    attached to the next message instead; without one, the request is a
+    follow-up.
 
                                                         *:LeaderKEdit*
 :[range]LeaderKEdit [instruction]
@@ -176,10 +178,11 @@ highlighted with LeaderKSelection.
 ==============================================================================
 LIMITS                                                     *leader-k-limits*
 
-Edits replace whole lines. One conversation runs at a time. Request
-context comes from the files of the attached selections. Tree-sitter
-syntax colors on proposed lines require a parser for the filetype. Answers
-use the bundled Markdown parser; colors in their code blocks require a
-parser for the block's language.
+Edits replace whole lines. A conversation on the whole file sends all of it,
+and an edit there returns all of it. One conversation runs at a time. Request
+context comes from the files of the attached selections. Tree-sitter syntax
+colors on proposed lines require a parser for the filetype. Answers use the
+bundled Markdown parser; colors in their code blocks require a parser for the
+block's language.
 
  vim:tw=78:ts=8:ft=help:norl:

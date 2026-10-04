@@ -24,7 +24,7 @@ end
 ---@class leader_k.OpenOpts
 ---@field mode? leader_k.Mode "auto" (default) lets the model edit or answer; "edit" or "ask" forces one.
 
----Starts a conversation on the visual selection, or the current line in
+---Starts a conversation on the visual selection, or the whole file in
 ---Normal mode. During a conversation, attaches the visual selection to the
 ---next message, or in Normal mode moves into the panel input.
 ---@param opts leader_k.OpenOpts|nil
@@ -61,26 +61,28 @@ function M.open(opts)
     r0,
     r1,
     nil,
-    vim.tbl_extend("force", opts or {}, { focus = focus, selection = visual })
+    vim.tbl_extend("force", opts or {}, { focus = focus, selection = visual, whole = not visual })
   )
 end
 
 ---Starts a conversation on lines l1..l2 (1-based), or attaches them to the
----next message of the current one. Sends `instruction` right away when it
+---next message of the current one. With `opts.whole`, starts on the whole
+---file instead and attaches nothing. Sends `instruction` right away when it
 ---is not empty. Backs the commands.
 ---@param l1 integer
 ---@param l2 integer
 ---@param instruction string|nil
----@param opts leader_k.OpenOpts|nil
+---@param opts (leader_k.OpenOpts|{ whole: boolean|nil })|nil
 function M.run(l1, l2, instruction, opts)
   if not did_setup then
     M.setup()
   end
+  opts = opts or {}
   require("leader-k.session").start(
     l1 - 1,
     l2 - 1,
     instruction,
-    vim.tbl_extend("force", opts or {}, { selection = true })
+    vim.tbl_extend("force", opts, { selection = not opts.whole })
   )
 end
 

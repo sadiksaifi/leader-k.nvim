@@ -84,10 +84,10 @@ opts = {
 
 ## Use
 
-Select code, or put the cursor on a line, and press `<leader>k`. A panel
-opens on the right with the selection attached and an input for your
-request. Until you send it, the panel shows the selected code and example
-requests. The model decides how to reply:
+Select code and press `<leader>k`, or press it in Normal mode to chat about
+the whole file. A panel opens on the right with the selection attached and
+an input for your request. Until you send it, the panel shows the selected
+code and example requests. The model decides how to reply:
 
 - A change, such as "use ipairs", comes back as a proposed edit shown inline
   as a diff. Nothing changes until you accept it.
@@ -113,7 +113,7 @@ the lines they are on, so you can ask about a single expression.
 
 | Context | Key | Action |
 | --- | --- | --- |
-| Normal / Visual | `<leader>k` | Start on the current line / selection |
+| Normal / Visual | `<leader>k` | Start on the whole file / selection |
 | Conversation, Visual | `<leader>k` | Attach the selection to the next message |
 | Conversation, Normal | `<leader>k` | Move into the panel input |
 | Panel input | `<CR>` / `<Up>` / `<Down>` | Send / recall requests |
@@ -131,6 +131,7 @@ To always get one kind of reply, map the mode explicitly:
 ```
 
 `:LeaderK` (model decides), `:LeaderKEdit`, and `:LeaderKAsk` accept a range
-and an optional request. During a conversation, they attach the range. See
+and an optional request. Without a range, they use the whole file. During a
+conversation, they attach the range. See
 `:help leader-k` for more keys. Run `:checkhealth leader-k` to inspect your
 setup.

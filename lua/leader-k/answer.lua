@@ -57,13 +57,18 @@ end
 ---@param r0 integer First row, 0-based.
 ---@param r1 integer Last row, 0-based.
 ---@param part boolean Only some characters of the rows are selected.
+---@param total integer Lines in the file.
 ---@return string
-function M.label(path, r0, r1, part)
+function M.label(path, r0, r1, part, total)
+  local tail = vim.fn.fnamemodify(path, ":t")
   if r1 < r0 then
-    return ("Attached: lines of %s, replaced since. Select them again."):format(vim.fn.fnamemodify(path, ":t"))
+    return ("Attached: lines of %s, replaced since. Select them again."):format(tail)
+  end
+  if not part and r0 == 0 and r1 == total - 1 then
+    return ("Attached: all of %s"):format(tail)
   end
   local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
-  return ("Attached: %s%s of %s"):format(part and "part of " or "", where, vim.fn.fnamemodify(path, ":t"))
+  return ("Attached: %s%s of %s"):format(part and "part of " or "", where, tail)
 end
 
 ---Before the first request: the selection, then example requests.
@@ -78,7 +83,10 @@ local function intro(s)
   local r0, r1 = render.region(s)
   if r1 >= r0 then
     local name = vim.api.nvim_buf_get_name(s.buf)
-    local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
+    local total = vim.api.nvim_buf_line_count(s.buf)
+    local where = (r0 == 0 and r1 == total - 1 and r1 > 0) and ("all %d lines"):format(total)
+      or r0 == r1 and ("line %d"):format(r0 + 1)
+      or ("lines %d-%d"):format(r0 + 1, r1 + 1)
     note(("%s, %s"):format(name ~= "" and vim.fn.fnamemodify(name, ":t") or "[unnamed buffer]", where))
     local selected = s:region_lines()
     local shown = vim.list_slice(selected, 1, PREVIEW)
@@ -160,7 +168,7 @@ local function transcript(s)
       local a = turn.attach
       if a then
         notes[#notes + 1] = #out
-        ask(M.label(a.path, a.first_row - 1, a.first_row + math.max(#a.selection, 1) - 2, a.focus ~= nil))
+        ask(M.label(a.path, a.first_row - 1, a.first_row + math.max(#a.selection, 1) - 2, a.focus ~= nil, a.line_count))
       end
       for _, l in ipairs(vim.split(turn.instruction, "\n", { plain = true })) do
         ask(l)

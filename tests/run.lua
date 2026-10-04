@@ -1180,7 +1180,7 @@ local function chip(s)
   return {}
 end
 
-test("<leader>k opens the panel with the selection attached", function()
+test("<leader>k in Normal mode opens the panel with the whole file attached", function()
   use("fast")
   lines(SAMPLE)
   vim.api.nvim_buf_set_name(0, "sample.lua")
@@ -1189,7 +1189,8 @@ test("<leader>k opens the panel with the selection attached", function()
   local s = assert(session.current())
   eq(s.state, "prompt")
   eq(vim.api.nvim_get_current_win(), s.input_win, "the input is focused")
-  eq(chip(s), { "Attached: line 4 of sample.lua", "LeaderKNote" })
+  eq(chip(s), { "Attached: all of sample.lua", "LeaderKNote" })
+  eq({ render.region(s) }, { 0, #SAMPLE - 1 })
   vim.cmd.stopinsert()
   vim.api.nvim_set_current_win(s.win)
   vim.api.nvim_feedkeys("6GVj" .. vim.keycode("<Space>") .. "k", "x", false)
@@ -1227,6 +1228,25 @@ test("before the first request the transcript shows the selection and example re
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
   wait_state(s, "answered")
   eq(answer_text(s):find("Try:", 1, true), nil, "the first request replaces it")
+end)
+
+test("a command without a range is about the whole file", function()
+  use("route")
+  lines(SAMPLE)
+  vim.cmd("LeaderKAsk what is this?")
+  local s = assert(session.current())
+  wait_state(s, "answered")
+  local msg = last_request().body.messages[2].content
+  truthy(msg:find("The selection is the whole file.", 1, true), msg)
+  truthy(msg:find("<selection>\n" .. table.concat(SAMPLE, "\n") .. "\n</selection>", 1, true), msg)
+  eq(msg:find("<before>", 1, true), nil, msg)
+
+  vim.cmd("LeaderK and why?")
+  wait_state(s, "answered")
+  local msgs = last_request().body.messages
+  eq(#msgs, 4)
+  eq(msgs[4].content:find("<selection>", 1, true), nil, "a follow-up attaches nothing")
+  eq({ render.region(s) }, { 0, #SAMPLE - 1 })
 end)
 
 test("a selection in another buffer is attached to the next follow-up", function()
@@ -1372,7 +1392,7 @@ test("lines just accepted and then replaced do not resume the conversation", fun
   lk.open()
   local r = assert(session.current())
   eq(#r.turns, 0, "a new conversation")
-  eq({ render.region(r) }, { 0, 0 })
+  eq({ render.region(r) }, { 0, vim.api.nvim_buf_line_count(r.buf) - 1 }, "the whole file")
   vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "x", false)
 end)
 
