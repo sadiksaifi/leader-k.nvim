@@ -10,14 +10,16 @@ REQUIREMENTS                                        *leader-k-requirements*
 ==============================================================================
 USE                                                          *leader-k-use*
 
-Map <leader>k to require("leader-k").open() in Normal mode. It opens the
-sidebar and moves into its input. Type a request and press Enter. With
-nothing attached, the first message sends the current file.
+Map <leader>k to require("leader-k").open() in Normal and Visual mode. In
+Normal mode it opens the sidebar and moves into its input. Type a request
+and press Enter. With nothing attached, the first message sends the
+current file. In Visual mode (characterwise, linewise, or blockwise) it
+first attaches the selection.
 
-While the sidebar is open, select code in any buffer. A hint above the
-selection names keys.attach, <leader>a by default. Press it to attach the
-selection to the next message; the cursor stays in the code. Repeat it to
-collect several selections. `@path` in a message attaches that project
+To collect more code, select it while the sidebar is open. A hint above
+the selection names keys.attach, <leader>a by default. Press it to attach
+the selection to the next message; the cursor stays in the code. Repeat it
+to collect several selections. `@path` in a message attaches that project
 file. The attachments show above the input until they are sent.
 
 The model works in the project root: the nearest directory above the file

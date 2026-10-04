@@ -27,19 +27,14 @@ local function ensure_setup()
   end
 end
 
----Opens the panel and moves into its input. In Visual mode with the panel
----open, attaches the selection instead and stays in the code; with the
----panel closed, the selection is dropped.
+---Opens the panel and moves into its input. In Visual mode, it first
+---attaches the selection, as keys.attach does.
 function M.open()
   ensure_setup()
   local agent = require("leader-k.agent")
   local mode = vim.fn.mode()
   if mode == "v" or mode == "V" or mode == "\22" then
-    local buf, r0, r1, focus = require("leader-k.context").visual()
-    if require("leader-k.attach").enabled() then
-      agent.attach_selection(buf, r0, r1, focus)
-      return
-    end
+    agent.attach_selection(require("leader-k.context").visual())
   end
   agent.open()
 end

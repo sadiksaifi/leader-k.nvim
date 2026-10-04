@@ -17,7 +17,7 @@ You review each edit in the code, file by file, before it applies.
   "sadiksaifi/leader-k.nvim",
   cmd = { "LeaderK", "LeaderKAdd", "LeaderKNew" },
   keys = {
-    { "<leader>k", function() require("leader-k").open() end },
+    { "<leader>k", function() require("leader-k").open() end, mode = { "n", "x" } },
   },
   ---@type leader_k.Config
   opts = {
@@ -90,8 +90,12 @@ opts = {
 `<leader>k` in Normal mode opens the sidebar. Type a request and press
 Enter. With nothing attached, the first message sends the current file.
 
-To send other code, select it while the sidebar is open. A hint above the
-selection names the attach key, `<leader>a`. Repeat this in any buffer to
+`<leader>k` in Visual mode (characterwise, linewise, or blockwise) attaches
+the selection, opens the sidebar, and moves into its input.
+
+To collect more code, select it while the sidebar is open. A hint above
+the selection names the attach key, `<leader>a`, which attaches the
+selection and keeps the cursor in the code. Repeat this in any buffer to
 collect several selections. `:LeaderKAdd [path]` attaches a whole file, and
 `@path` in a message attaches that file. The attachments show above the
 input until you send them.
@@ -111,6 +115,7 @@ opening it again resumes it.
 | Context | Key | Action |
 | --- | --- | --- |
 | Normal | `<leader>k` | Open the sidebar, or move into its input |
+| Visual | `<leader>k` | Attach the selection, then open the sidebar and move into its input |
 | Visual, sidebar open | `<leader>a` | Attach the selection |
 | Input | `<CR>` | Send |
 | Input | `<Up>` / `<Down>` | Recall messages |
