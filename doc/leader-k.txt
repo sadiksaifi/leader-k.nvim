@@ -15,7 +15,7 @@ sidebar and moves into its input. Type a request and press Enter. With
 nothing attached, the first message sends the current file.
 
 While the sidebar is open, select code in any buffer. A hint above the
-selection names keys.attach, <C-l> by default. Press it to attach the
+selection names keys.attach, <leader>a by default. Press it to attach the
 selection to the next message; the cursor stays in the code. Repeat it to
 collect several selections. `@path` in a message attaches that project
 file. The attachments show above the input until they are sent.
@@ -119,7 +119,7 @@ Also in the transcript:
   keys.refine      <leader>k, i   Move into the input.
 
 In Visual mode, while the sidebar is open:
-  keys.attach      <C-l>  Attach the selection.
+  keys.attach      <leader>a   Attach the selection.
 
 The attach key replaces a global Visual-mode mapping of the same key only
 while the sidebar is open, and restores it when the sidebar closes.

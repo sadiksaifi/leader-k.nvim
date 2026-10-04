@@ -91,7 +91,7 @@ opts = {
 Enter. With nothing attached, the first message sends the current file.
 
 To send other code, select it while the sidebar is open. A hint above the
-selection names the attach key, `<C-l>`. Repeat this in any buffer to
+selection names the attach key, `<leader>a`. Repeat this in any buffer to
 collect several selections. `:LeaderKAdd [path]` attaches a whole file, and
 `@path` in a message attaches that file. The attachments show above the
 input until you send them.
@@ -104,14 +104,14 @@ review keys work there, and the row under the input names them. Accepting
 writes the edit into the buffer, unsaved; save it with `:w`. `u` undoes it.
 
 The code buffer keeps its own keys during a review. The attach key exists
-only while the sidebar is open; elsewhere `<C-l>` keeps its usual meaning,
-including your own mapping. Closing the sidebar pauses the review; opening
-it again resumes it.
+only while the sidebar is open; otherwise `<leader>a` keeps its usual
+meaning, including your own mapping. Closing the sidebar pauses the review;
+opening it again resumes it.
 
 | Context | Key | Action |
 | --- | --- | --- |
 | Normal | `<leader>k` | Open the sidebar, or move into its input |
-| Visual, sidebar open | `<C-l>` | Attach the selection |
+| Visual, sidebar open | `<leader>a` | Attach the selection |
 | Input | `<CR>` | Send |
 | Input | `<Up>` / `<Down>` | Recall messages |
 | Input, empty | `<BS>` | Remove the newest attachment |
