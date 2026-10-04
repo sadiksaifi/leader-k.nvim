@@ -14,14 +14,24 @@ local input_ns = vim.api.nvim_create_namespace("leader-k.answer.input")
 local MAX_WIDTH = 80
 local MIN_WIDTH = 30
 local MAX_INPUT = 6
+-- Lines of the selection the transcript shows before the first request.
+local PREVIEW = 12
 
 -- Placeholders for the first request, and for one that resumes an accepted
 -- conversation.
 local REQUEST = { auto = "Ask, or describe a change.", edit = "Describe the change.", ask = "Ask a question." }
 local FOLLOW_UP = { auto = "Ask, or describe a change.", edit = "What should change?", ask = "Ask a follow-up." }
 
--- Rows (1-based) of the user's messages, per answer buffer, for the column.
----@type table<integer, table<integer, true>>
+-- Example requests the transcript shows before the first request.
+local EXAMPLES = {
+  auto = { "what does this do?", "simplify this", "add a doc comment" },
+  edit = { "simplify this", "add a doc comment", "handle errors here" },
+  ask = { "what does this do?", "why is this here?", "what could go wrong?" },
+}
+
+-- Rows (1-based) of the user's messages, and of the selection shown before
+-- the first request, per answer buffer, for the column.
+---@type table<integer, table<integer, true|"code">>
 local user_rows = {}
 
 ---@param s leader_k.Session
@@ -56,10 +66,72 @@ function M.label(path, r0, r1, part)
   return ("Attached: %s%s of %s"):format(part and "part of " or "", where, vim.fn.fnamemodify(path, ":t"))
 end
 
----Each turn as its question, then its answer or a note about its edit.
+---Before the first request: the selection, then example requests.
 ---@param s leader_k.Session
----@return string[] lines, integer[] questions 0-based rows of the user's messages, integer[] notes 0-based rows of notes, integer latest 0-based row where the last turn starts
+---@return string[] lines, integer[] notes 0-based rows of notes, integer[] code 0-based rows of the selection
+local function intro(s)
+  local out, notes, code = {}, {}, {}
+  local function note(line)
+    notes[#notes + 1] = #out
+    out[#out + 1] = line
+  end
+  local r0, r1 = render.region(s)
+  if r1 >= r0 then
+    local name = vim.api.nvim_buf_get_name(s.buf)
+    local where = r0 == r1 and ("line %d"):format(r0 + 1) or ("lines %d-%d"):format(r0 + 1, r1 + 1)
+    note(("%s, %s"):format(name ~= "" and vim.fn.fnamemodify(name, ":t") or "[unnamed buffer]", where))
+    local selected = s:region_lines()
+    local shown = vim.list_slice(selected, 1, PREVIEW)
+    -- Drop the indent the shown lines share.
+    local indent
+    for _, l in ipairs(shown) do
+      if l:find("%S") then
+        local lead = l:match("^%s*")
+        while indent and lead:sub(1, #indent) ~= indent do
+          indent = indent:sub(1, -2)
+        end
+        indent = indent or lead
+      end
+    end
+    -- Markdown hides the fence lines; a fence longer than any run of
+    -- backticks in the code keeps the code inside it.
+    local ticks = 2
+    for _, l in ipairs(shown) do
+      for run in l:gmatch("`+") do
+        ticks = math.max(ticks, #run)
+      end
+    end
+    local fence = ("`"):rep(ticks + 1)
+    local ft = vim.bo[s.buf].filetype
+    out[#out + 1] = fence .. (vim.treesitter.language.get_lang(ft) or ft)
+    for _, l in ipairs(shown) do
+      code[#code + 1] = #out
+      out[#out + 1] = l:sub(#(indent or "") + 1)
+    end
+    out[#out + 1] = fence
+    if #selected > #shown then
+      note(("%d more lines"):format(#selected - #shown))
+    end
+    out[#out + 1] = ""
+  end
+  note("Try:")
+  for _, e in ipairs(EXAMPLES[s.mode]) do
+    note("  " .. e)
+  end
+  out[#out + 1] = ""
+  note(("Visual %s attaches more code."):format(render.key_label("<leader>k")))
+  return out, notes, code
+end
+
+---Each turn as its question, then its answer or a note about its edit.
+---Before the first request, the selection and example requests.
+---@param s leader_k.Session
+---@return string[] lines, integer[] questions 0-based rows of the user's messages, integer[] notes 0-based rows of notes, integer latest 0-based row where the last turn starts, integer[] code 0-based rows of the selection
 local function transcript(s)
+  if #s.turns == 0 and s.state == "prompt" then
+    local lines, notes, code = intro(s)
+    return lines, {}, notes, 0, code
+  end
   local out, questions, notes, latest = {}, {}, {}, 0
   local function ask(line)
     questions[#questions + 1] = #out
@@ -101,7 +173,7 @@ local function transcript(s)
       vim.list_extend(out, vim.split(text, "\n", { plain = true }))
     end
   end
-  return out, questions, notes, latest
+  return out, questions, notes, latest, {}
 end
 
 ---@param text string
@@ -473,7 +545,10 @@ end
 ---@return string
 function M.column()
   local rows = user_rows[vim.api.nvim_win_get_buf(vim.g.statusline_winid)]
-  if rows and rows[vim.v.lnum] then
+  local row = rows and rows[vim.v.lnum]
+  if row == "code" then
+    return "%#LeaderKDivider#▎"
+  elseif row then
     return "%#LeaderKUserEdge#▎"
   end
   return " "
@@ -508,10 +583,14 @@ function M.sync(s)
     s.input_buf = create_input(s)
   end
   local abuf = s.answer_buf
-  local lines, questions, notes, latest = transcript(s)
+  local lines, questions, notes, latest, code = transcript(s)
   local joined = table.concat(lines, "\n")
   if joined ~= s.answer_lines then
     s.answer_lines = joined
+    -- Show tabs in code as wide as the code's buffer does.
+    if vim.api.nvim_buf_is_valid(s.buf) then
+      vim.bo[abuf].tabstop = vim.bo[s.buf].tabstop
+    end
     vim.bo[abuf].modifiable = true
     vim.api.nvim_buf_set_lines(abuf, 0, -1, false, lines)
     vim.bo[abuf].modifiable = false
@@ -520,6 +599,9 @@ function M.sync(s)
     for _, row in ipairs(questions) do
       rows[row + 1] = true
       vim.api.nvim_buf_set_extmark(abuf, ns, row, 0, { line_hl_group = "LeaderKUser" })
+    end
+    for _, row in ipairs(code) do
+      rows[row + 1] = "code"
     end
     user_rows[abuf] = rows
     for _, row in ipairs(notes) do

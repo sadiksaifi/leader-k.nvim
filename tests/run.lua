@@ -1198,6 +1198,37 @@ test("<leader>k opens the panel with the selection attached", function()
   eq(s.pending, nil)
 end)
 
+test("before the first request the transcript shows the selection and example requests", function()
+  use("answer")
+  vim.bo.filetype = "lua"
+  lines(SAMPLE)
+  vim.api.nvim_buf_set_name(0, "intro.lua")
+  lk.run(4, 6)
+  local s = assert(session.current())
+  eq(
+    answer_text(s),
+    table.concat({
+      "intro.lua, lines 4-6",
+      "```lua",
+      "local sum = 0",
+      "for i = 1, #items do",
+      "  sum = sum + items[i].price * items[i].qty",
+      "```",
+      "",
+      "Try:",
+      "  what does this do?",
+      "  simplify this",
+      "  add a doc comment",
+      "",
+      "Visual Leader k attaches more code.",
+    }, "\n")
+  )
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "why?" })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  wait_state(s, "answered")
+  eq(answer_text(s):find("Try:", 1, true), nil, "the first request replaces it")
+end)
+
 test("a selection in another buffer is attached to the next follow-up", function()
   use("route")
   lines(SAMPLE)

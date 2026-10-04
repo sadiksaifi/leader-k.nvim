@@ -86,7 +86,8 @@ opts = {
 
 Select code, or put the cursor on a line, and press `<leader>k`. A panel
 opens on the right with the selection attached and an input for your
-request. The model decides how to reply:
+request. Until you send it, the panel shows the selected code and example
+requests. The model decides how to reply:
 
 - A change, such as "use ipairs", comes back as a proposed edit shown inline
   as a diff. Nothing changes until you accept it.

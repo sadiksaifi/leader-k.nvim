@@ -18,18 +18,19 @@ Type a request and press Enter. The model decides how to reply:
                 it to the buffer.
   A question    A Markdown answer in the panel. The buffer is not changed.
 
-The panel holds the conversation. Its transcript sits above the input. A
-dim divider above the input shows the status, such as "+3 -3 Review it in
-the code.", and the last row of the input box shows the keys. The code
-keeps the selection marked and shows a diff when a reply proposes an edit;
-focus then moves to the code for review.
+The panel holds the conversation. Its transcript sits above the input. Before
+the first request, the transcript shows the selected code, up to 12 lines, and
+example requests. A dim divider above the input shows the status, such as
+"+3 -3 Review it in the code.", and the last row of the input box shows the
+keys.
+The code keeps the selection marked and shows a diff when a reply proposes an
+edit; focus then moves to the code for review.
 
 During review: Enter accepts, Backspace rejects, <leader>k moves into the
-panel input to refine, and <C-c> stops a running request. These keys work
-in the code; the last row of the input box lists them while the input is
-not focused. A changed
-selection cannot be accepted until that edit is undone. Errors appear in
-|:messages|.
+panel input to refine, and <C-c> stops a running request. These keys work in
+the code; the last row of the input box lists them while the input is not
+focused. A changed selection cannot be accepted until that edit is undone.
+Errors appear in |:messages|.
 
 Accepting or rejecting a proposal ends the conversation, and so do q in the
 panel and closing either panel window. Backspace in the code also closes an
