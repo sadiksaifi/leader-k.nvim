@@ -129,7 +129,6 @@ end
 local function teardown()
   local S = agent.get()
   if S then
-    S.confirm_close = true
     agent.close()
   end
   review.hide()
@@ -626,17 +625,32 @@ test("after a run, focus moves to the transcript and the input names the review 
   eq(input_hints(), "a accept  r reject  ]f next file")
   feed("a")
   eq(input_hints(), "a accept  r reject", "the last file has no next file")
-  -- Esc in the empty input goes back to the transcript while files wait.
-  panel.focus_input(S)
-  vim.cmd.stopinsert()
-  feed("<Esc>")
-  eq(vim.api.nvim_get_current_win(), S.panel.twin)
   feed("r")
-  eq(input_hints(), "Leader k type  q close")
-  panel.focus_input(S)
-  vim.cmd.stopinsert()
+  eq(input_hints(), "Leader k type")
+end)
+
+test("Esc, Ctrl-c, and q keep their native meaning in the panel", function()
+  use("script")
+  edit("a.lua")
+  agent.open()
+  local S = assert(agent.get())
+  eq(vim.api.nvim_get_current_win(), S.panel.iwin)
+  -- Insert mode starts on the next input loop; wait for it.
+  vim.wait(100, function()
+    return vim.fn.mode() == "i"
+  end)
   feed("<Esc>")
-  eq(vim.api.nvim_get_current_win(), code_win(), "with nothing to review, Esc goes to the code")
+  eq(vim.fn.mode(), "n")
+  eq(vim.api.nvim_get_current_win(), S.panel.iwin, "Esc does not move to another window")
+  feed("i<C-c>")
+  eq(vim.fn.mode(), "n")
+  eq(vim.api.nvim_get_current_win(), S.panel.iwin, "Ctrl-c with no reply running leaves Insert mode")
+  for _, buf in ipairs({ S.panel.tbuf, S.panel.ibuf }) do
+    vim.api.nvim_buf_call(buf, function()
+      eq(vim.fn.maparg("q", "n"), "", "q is not mapped")
+      eq(vim.fn.maparg("<Esc>", "n"), "", "Esc is not mapped")
+    end)
+  end
 end)
 
 test("a run does not take focus from a typed message", function()
@@ -1009,23 +1023,6 @@ test("max_steps stops a loop that keeps calling tools", function()
   has(transcript(), "Stopped after 3 requests for one message. Send a message to continue.")
 end)
 
-test("q with pending changes asks for a second q", function()
-  script(EDITS)
-  use("script")
-  edit("a.lua")
-  send("annotate")
-  wait_idle()
-  local S = assert(agent.get())
-  vim.api.nvim_set_current_win(S.panel.twin)
-  feed("q")
-  truthy(agent.get(), "the first q only warns")
-  has(warned[#warned], "2 files are pending review. Press q again")
-  feed("q")
-  eq(agent.get(), nil)
-  eq(review.current, nil)
-  eq(#vim.api.nvim_tabpage_list_wins(0), 1)
-end)
-
 test("closing the panel windows keeps the conversation", function()
   script({ { content = "First answer." } })
   use("script")
@@ -1033,7 +1030,14 @@ test("closing the panel windows keeps the conversation", function()
   send("hi")
   wait_idle()
   local S = assert(agent.get())
-  vim.api.nvim_win_close(S.panel.twin, true)
+  for _, buf in ipairs({ S.panel.tbuf, S.panel.ibuf }) do
+    vim.api.nvim_buf_call(buf, function()
+      eq(vim.fn.maparg("q", "n"), "", "q keeps its usual meaning")
+    end)
+  end
+  -- The user's usual window command closes the panel.
+  vim.api.nvim_set_current_win(S.panel.twin)
+  feed("<C-w>c")
   vim.wait(50)
   eq(#vim.api.nvim_tabpage_list_wins(0), 1, "both panel windows close")
   eq(agent.get(), S)
@@ -1041,6 +1045,13 @@ test("closing the panel windows keeps the conversation", function()
   has(transcript(), "First answer.")
   eq(vim.api.nvim_get_current_win(), S.panel.iwin)
   vim.cmd.stopinsert()
+  feed("<C-w>c")
+  -- In a UI, WinResized runs a sync before the WinClosed handler closes the
+  -- panel. Headless Neovim does not send it.
+  eq(pcall(panel.sync, S), true, "a sync with one panel window left does not fail")
+  vim.wait(50)
+  eq(#vim.api.nvim_tabpage_list_wins(0), 1, "closing the input closes the panel too")
+  eq(agent.get(), S)
 end)
 
 test(":LeaderKNew starts over", function()

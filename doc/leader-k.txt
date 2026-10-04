@@ -35,10 +35,10 @@ it. A file edited after the proposal
 cannot be accepted; reject it or ask again. The next message tells the
 model which files were accepted and rejected.
 
-Closing the sidebar window keeps the conversation; <leader>k reopens it.
-Closing it also pauses the review, and reopening it resumes the review.
-`q` in the sidebar ends the conversation. With edits pending, it asks for a
-second `q`. Errors appear in the transcript and in |:messages|.
+Close the sidebar as you close any window, such as with CTRL-W c or |:q|.
+Closing it keeps the conversation and pauses the review; <leader>k reopens
+it and resumes the review. |:LeaderKNew| starts over. Errors appear in the
+transcript and in |:messages|.
 
                                                             *:LeaderK*
 :[range]LeaderK [request]
@@ -125,12 +125,14 @@ The attach key replaces a global Visual-mode mapping of the same key only
 while the sidebar is open, and restores it when the sidebar closes.
 
 In the sidebar:
-  keys.cancel      <C-c>  Stop the reply.
-  q                       Close the sidebar and end the conversation.
+  keys.cancel      <C-c>  Stop the reply. With no reply running, it keeps
+                          its usual meaning.
 
 In the input: Enter sends; Up/Down recall messages. With the input empty,
-Backspace removes the newest attachment, and Esc goes to the transcript
-while files wait for review, else back to the code.
+Backspace removes the newest attachment.
+
+The sidebar maps only keys that do nothing useful in it otherwise. Esc, q,
+and the CTRL-W window commands keep their usual meaning.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*

@@ -115,9 +115,7 @@ opening it again resumes it.
 | Input | `<CR>` | Send |
 | Input | `<Up>` / `<Down>` | Recall messages |
 | Input, empty | `<BS>` | Remove the newest attachment |
-| Input, empty | `<Esc>` | To the transcript while files wait for review, else back to the code |
 | Sidebar | `<C-c>` | Stop the reply |
-| Sidebar | `q` | Close and end the conversation |
 | Transcript | `a` / `r` | Accept / reject the file under review |
 | Transcript | `]f` / `[f` | Next / previous changed file |
 | Transcript | `]c` / `[c` | Next / previous change in the file |
@@ -125,9 +123,14 @@ opening it again resumes it.
 | Transcript | `A` / `R` | Accept / reject every pending file |
 | Transcript | `<leader>k` / `i` | Move into the input |
 
+The sidebar maps only keys that have no use in it otherwise. Esc, `q`,
+and window commands keep their native meaning: move between the sidebar
+and the code with `<C-w>`, and close the sidebar as you close any window,
+such as with `<C-w>c` or `:q`.
+
 `:LeaderK [request]` opens the sidebar and sends the request, with the range
 attached when one is given. `:LeaderKNew` starts over. Closing the sidebar
-window keeps the conversation; `<leader>k` brings it back. See
+keeps the conversation; `<leader>k` brings it back. See
 `:help leader-k` for options. Run `:checkhealth leader-k` to inspect your
 setup.
 

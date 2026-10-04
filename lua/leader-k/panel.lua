@@ -202,13 +202,13 @@ local function divider(S, width)
   else
     left = { { S.model_label } }
   end
-  right = right or "q close"
+  right = right or ""
   local used, out = 4, { "── " }
   for _, c in ipairs(left) do
     used = used + vim.fn.strdisplaywidth(c[1])
     out[#out + 1] = c[2] and ("%#" .. c[2] .. "#" .. escape(c[1]) .. "%#LeaderKDivider#") or escape(c[1])
   end
-  local fill = width - used - vim.fn.strdisplaywidth(right) - 4
+  local fill = right == "" and width - used or width - used - vim.fn.strdisplaywidth(right) - 4
   if fill < 1 then
     right, fill = "", math.max(width - used, 0)
   end
@@ -230,8 +230,7 @@ local function hints(S, focused)
   local list
   local r = review.current
   if focused then
-    local esc = #S.changes:pending() > 0 and "review" or "back to the code"
-    list = { { "<CR>", "send" }, { "<Up>", "history" }, { "<Esc>", esc } }
+    list = { { "<CR>", "send" }, { "<Up>", "history" } }
   elseif r then
     list = r.stale and { { keys.reject, "reject" } } or { { keys.accept, "accept" }, { keys.reject, "reject" } }
     if #S.changes:pending() > 1 then
@@ -241,7 +240,7 @@ local function hints(S, focused)
       list[#list + 1] = { keys.next_hunk, "next change" }
     end
   else
-    list = { { keys.refine, "type" }, { "q", "close" } }
+    list = { { keys.refine, "type" } }
   end
   local chunks = {}
   for i, h in ipairs(list) do
@@ -333,17 +332,6 @@ function M.focus_transcript(S)
   end
 end
 
----With files to review, Esc in an empty input goes to the transcript,
----where the review keys work. Otherwise it goes back to the code.
----@param S leader_k.Conversation
-local function leave_input(S)
-  if #S.changes:pending() > 0 then
-    M.focus_transcript(S)
-  else
-    M.to_code(S)
-  end
-end
-
 ---@param S leader_k.Conversation
 local function refresh_input(S)
   local p = state(S)
@@ -405,9 +393,6 @@ local function map_common(S, buf)
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
   end
-  map("q", function()
-    agent().close()
-  end)
   map(keys.cancel, function()
     agent().stop()
   end)
@@ -529,31 +514,22 @@ local function create_input(S)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
     end
   end)
-  map("i", config.options.keys.cancel, function()
-    if S.state == "running" then
-      agent().stop()
-    else
-      M.to_code(S)
+  -- Ctrl-c stops a running reply; otherwise it leaves Insert mode, as usual.
+  vim.keymap.set("i", config.options.keys.cancel, function()
+    if S.state ~= "running" then
+      return "<C-c>"
     end
-  end)
-  map("n", "<Esc>", function()
-    leave_input(S)
-  end)
-  -- With nothing typed, Esc leaves the input and Backspace drops the
-  -- newest attachment. Otherwise they edit the text, as usual.
+    vim.schedule(function()
+      agent().stop()
+    end)
+    return ""
+  end, { buffer = buf, expr = true, nowait = true, silent = true })
+  -- With nothing typed, Backspace drops the newest attachment. Otherwise
+  -- it edits the text, as usual.
   local function empty()
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     return #lines == 1 and lines[1] == ""
   end
-  vim.keymap.set("i", "<Esc>", function()
-    if not empty() then
-      return "<Esc>"
-    end
-    vim.schedule(function()
-      leave_input(S)
-    end)
-    return ""
-  end, { buffer = buf, expr = true, nowait = true, silent = true })
   vim.keymap.set("i", "<BS>", function()
     if not empty() then
       return "<BS>"
@@ -741,6 +717,11 @@ function M.sync(S, show)
   end
 
   local opened = false
+  if valid(p.twin) ~= valid(p.iwin) then
+    -- One of the windows was just closed; the WinClosed handler closes the
+    -- other.
+    return
+  end
   if not valid(p.twin) then
     if not p.visible then
       return

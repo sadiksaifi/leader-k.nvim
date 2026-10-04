@@ -43,7 +43,6 @@ local attach_ns = vim.api.nvim_create_namespace("leader-k.attached")
 ---@field dirty boolean The transcript needs a redraw.
 ---@field timer uv.uv_timer_t|nil
 ---@field augroup integer
----@field confirm_close boolean
 ---@field files string[]|nil Project files for @path completion.
 ---@field resume leader_k.Change|nil The file to review once the panel opens.
 
@@ -631,7 +630,6 @@ function M.submit(text)
     S.before[c] = c.staged
   end
   S.state, S.step, S.run = "running", 0, {}
-  S.confirm_close = false
   start_timer()
   step(S.run)
   sync()
@@ -742,7 +740,6 @@ local function ensure()
     origin_win = win,
     model_label = model_label(config.options.model or ""),
     dirty = false,
-    confirm_close = false,
   }
   local conv = S
   S.augroup = vim.api.nvim_create_augroup("leader-k.conversation", { clear = true })
@@ -854,31 +851,11 @@ function M.attach_file(path)
   sync(true)
 end
 
----Closes the panel and ends the conversation. With pending changes, asks
----for a second press first.
+---Closes the panel and ends the conversation, discarding pending changes.
 function M.close()
-  if not S then
-    return
+  if S then
+    destroy()
   end
-  local pending = #S.changes:pending()
-  if pending > 0 and not S.confirm_close then
-    S.confirm_close = true
-    warn(
-      ("%d %s pending review. Press q again to discard %s and close."):format(
-        pending,
-        pending == 1 and "file is" or "files are",
-        pending == 1 and "it" or "them"
-      )
-    )
-    local conv = S
-    vim.defer_fn(function()
-      if S == conv then
-        conv.confirm_close = false
-      end
-    end, 3000)
-    return
-  end
-  destroy()
 end
 
 ---Starts over with an empty conversation, discarding pending changes.
