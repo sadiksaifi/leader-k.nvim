@@ -1,25 +1,55 @@
-*leader-k.txt*  Inline AI edits                                      *leader-k*
+*leader-k.txt*  AI chat sidebar with reviewed edits                 *leader-k*
 
 ==============================================================================
 REQUIREMENTS                                        *leader-k-requirements*
 
   Neovim 0.12+ with LuaJIT  https://neovim.io/
-  libcurl shared library   https://curl.se/libcurl/
+  libcurl shared library    https://curl.se/libcurl/
+  git and rg (optional)     Used by the list_files and search tools.
 
 ==============================================================================
 USE                                                          *leader-k-use*
 
-Map <leader>k to require("leader-k").open(). In Visual mode it edits the
-selected lines; in Normal mode it edits the current line. Enter submits the
-instruction. Accepting applies the proposal to the buffer.
+Map <leader>k to require("leader-k").open() in Normal and Visual mode.
 
-During review: Enter accepts, Backspace rejects, <leader>k refines, and
-<C-c> stops a running request. A changed selection cannot be accepted until
-that edit is undone. Errors appear in |:messages|.
+In Normal mode it opens the sidebar and moves into its input. Type a
+request and press Enter. With nothing attached, the first message sends the
+current file.
+
+In Visual mode it attaches the selection to the next message and stays in
+the code. Repeat it in any buffer to collect several selections. `@path` in
+a message attaches that project file. The attachments show above the input
+until they are sent.
+
+The model works in the project root: the nearest directory above the file
+that holds one of `root_markers`, or the current directory. It can read,
+list, search, edit, and create files there. It cannot touch files outside
+the root, inside .git, or ignored by git, and it cannot delete files or run
+commands.
+
+Edits are proposals. When a reply proposes edits, the first changed file
+opens in the code window with the edit shown inline, and the transcript
+lists every changed file. Accepting writes the edit into the buffer, as one
+undo step, without saving it. A file edited after the proposal cannot be
+accepted; reject it or ask again. The next message tells the model which
+files were accepted and rejected.
+
+Closing the sidebar window keeps the conversation; <leader>k reopens it.
+`q` in the sidebar ends the conversation. With edits pending, it asks for a
+second `q`. Errors appear in the transcript and in |:messages|.
 
                                                             *:LeaderK*
-:[range]LeaderK [instruction]
-    Edit the range (default: current line). An instruction skips the prompt.
+:[range]LeaderK [request]
+    Open the sidebar. With a range, attach those lines. With a request,
+    send it.
+
+                                                         *:LeaderKAdd*
+:LeaderKAdd [path]
+    Attach a whole file, the current buffer's by default.
+
+                                                         *:LeaderKNew*
+:LeaderKNew
+    Start a new conversation. Pending edits are discarded.
 
 ==============================================================================
 SETUP                                                      *leader-k-setup*
@@ -37,8 +67,9 @@ SETUP                                                      *leader-k-setup*
     }
     require("leader-k").setup(opts)
 <
-leader-k uses OpenAI-compatible streaming Chat Completions. Plain http://
-works on localhost, 127.0.0.1, or [::1].
+leader-k uses OpenAI-compatible streaming Chat Completions with tool calls.
+The model must support tool calls. Plain http:// works on localhost,
+127.0.0.1, or [::1].
 
 Official endpoint documentation:
   OpenRouter  https://openrouter.ai/docs/quickstart
@@ -50,54 +81,75 @@ Official endpoint documentation:
 
 `api_key` is optional: use a literal string or { env = "NAME" }. Environment
 references are resolved on each request from Neovim's environment. For
-keyless endpoints, leave `api_key` unset. Authentication errors appear in
-|:messages|.
+keyless endpoints, leave `api_key` unset.
 
 Optional fields:
   params          Extra Chat Completions request fields. Check model support.
-                  Leave `model` and `messages` to the plugin; streaming stays
-                  enabled. A truncated response is rejected.
-  context_bytes   Context sent on each side of the selection. Default 50000.
-  timeout_ms      Request limit. Default 180000.
+                  Leave `model`, `messages`, and `tools` to the plugin;
+                  streaming stays enabled.
+  max_read_bytes  Most bytes one file read or attached file sends.
+                  Default 100000.
+  max_steps       Most requests for one message. Default 25.
+  root_markers    Names that mark the project root. Default { ".git" }.
+  timeout_ms      Limit for each request. Default 180000.
   libcurl         Path to libcurl if automatic loading fails.
-  keys            Review key mappings; see |leader-k-keys|.
+  keys            Key mappings; see |leader-k-keys|.
 
 Run |:checkhealth| leader-k to inspect your setup.
 
 ==============================================================================
 KEYS                                                        *leader-k-keys*
 
-  keys.accept  <CR>       Apply the proposal.
-  keys.reject  <BS>       Discard the proposal or stop a request.
-  keys.cancel  <C-c>      Stop a request. A refine returns to its proposal.
-  keys.refine  <leader>k  Request a follow-up edit; empty input regenerates.
+While a file is under review, in its buffer:
+  keys.accept      <CR>   Accept the file.
+  keys.reject      <BS>   Reject the file.
+  keys.next_file   ]f     Review the next changed file.
+  keys.prev_file   [f     Review the previous changed file.
+  keys.next_hunk   ]c     Go to the next change in the file.
+  keys.prev_hunk   [c     Go to the previous change in the file.
 
-In the prompt: Enter sends; Up/Down recall instructions; <C-c> cancels.
-Esc enters Normal mode, where Esc or q cancels.
+These keys act only while the file is under review. Elsewhere they keep
+their usual meaning, including your own mappings.
+
+In the transcript:
+  <CR>             Review the changed file under the cursor.
+  keys.accept_all  A      Accept every pending file.
+  keys.reject_all  R      Reject every pending file.
+  keys.refine      <leader>k, i, a   Move into the input.
+
+In the sidebar:
+  keys.cancel      <C-c>  Stop the reply.
+  q                       Close the sidebar and end the conversation.
+
+In the input: Enter sends; Up/Down recall messages. With the input empty,
+Esc returns to the code and Backspace removes the newest attachment.
 
 ==============================================================================
 TRANSPORT                                               *leader-k-transport*
 
 Requests run through libcurl in-process. TLS is verified and redirects are
 not followed. If configured, the key is sent as a Bearer token and is not
-logged. A literal key remains in your config file. Each request includes
-the selected lines, surrounding code (up to `context_bytes` on each side),
-file metadata, and diagnostics on the selection.
+logged. A literal key remains in your config file.
+
+Each request sends the conversation so far: your messages, the attached
+code with its diagnostics, the model's replies, and the tool results,
+which include the contents of every file the model read. list_files and
+search run git ls-files, rg, or git grep in the project root.
 
 ==============================================================================
 HIGHLIGHTS                                             *leader-k-highlights*
 
   LeaderKAdd  LeaderKAddText  LeaderKDelete  LeaderKDeleteText
-  LeaderKSelection  LeaderKPending  LeaderKBar  LeaderKBarDelete
-  LeaderKSpinner  LeaderKStatus  LeaderKInstruction  LeaderKKey  LeaderKHint
-  LeaderKCountAdd  LeaderKCountDelete  LeaderKWarn
-  LeaderKPlaceholder  LeaderKFooter  LeaderKFlash
+  LeaderKBar  LeaderKBarAdd  LeaderKBarDelete  LeaderKSpinner
+  LeaderKKey  LeaderKHint  LeaderKCountAdd  LeaderKCountDelete
+  LeaderKWarn  LeaderKPlaceholder  LeaderKNote  LeaderKUserBar
+  LeaderKUser  LeaderKUserEdge  LeaderKDivider
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*
 
-Selections edit whole lines. One session runs per buffer; sessions in other
-buffers can run in parallel. Request context comes from the current file.
-Tree-sitter syntax colors on proposed lines require a parser for the filetype.
+One conversation runs at a time. Edits replace exact text, so the model
+must read a file before it edits it. Tree-sitter colors on proposed lines
+require a parser for the filetype.
 
  vim:tw=78:ts=8:ft=help:norl:
