@@ -85,9 +85,10 @@ opts = {
 ## Use
 
 Select code and press `<leader>k`, or press it in Normal mode to chat about
-the whole file. A panel opens on the right with the selection attached and
-an input for your request. Until you send it, the panel shows the selected
-code and example requests. The model decides how to reply:
+the whole file. A panel opens on the right with an input for your request.
+Until you send it, the panel names what it will send, such as "Sending
+lines 20-25 of client.go" or "Sending the whole file: client.go". The model
+decides how to reply:
 
 - A change, such as "use ipairs", comes back as a proposed edit shown inline
   as a diff. Nothing changes until you accept it.

@@ -1180,7 +1180,7 @@ local function chip(s)
   return {}
 end
 
-test("<leader>k in Normal mode opens the panel with the whole file attached", function()
+test("<leader>k in Normal mode opens the panel on the whole file", function()
   use("fast")
   lines(SAMPLE)
   vim.api.nvim_buf_set_name(0, "sample.lua")
@@ -1189,45 +1189,28 @@ test("<leader>k in Normal mode opens the panel with the whole file attached", fu
   local s = assert(session.current())
   eq(s.state, "prompt")
   eq(vim.api.nvim_get_current_win(), s.input_win, "the input is focused")
-  eq(chip(s), { "Attached: all of sample.lua", "LeaderKNote" })
+  eq(answer_text(s), "Sending the whole file: sample.lua")
+  eq(chip(s), { "", "" }, "named once, in the transcript")
   eq({ render.region(s) }, { 0, #SAMPLE - 1 })
   vim.cmd.stopinsert()
   vim.api.nvim_set_current_win(s.win)
   vim.api.nvim_feedkeys("6GVj" .. vim.keycode("<Space>") .. "k", "x", false)
   eq({ render.region(s) }, { 5, 6 }, "a new selection before the first request replaces the first")
-  eq(chip(s), { "Attached: lines 6-7 of sample.lua", "LeaderKNote" })
+  eq(answer_text(s), "Sending lines 6-7 of sample.lua")
   eq(s.pending, nil)
 end)
 
-test("before the first request the transcript shows the selection and example requests", function()
+test("before the first request the transcript names only the lines it will send", function()
   use("answer")
-  vim.bo.filetype = "lua"
   lines(SAMPLE)
   vim.api.nvim_buf_set_name(0, "intro.lua")
   lk.run(4, 6)
   local s = assert(session.current())
-  eq(
-    answer_text(s),
-    table.concat({
-      "intro.lua, lines 4-6",
-      "```lua",
-      "local sum = 0",
-      "for i = 1, #items do",
-      "  sum = sum + items[i].price * items[i].qty",
-      "```",
-      "",
-      "Try:",
-      "  what does this do?",
-      "  simplify this",
-      "  add a doc comment",
-      "",
-      "Visual Leader k attaches more code.",
-    }, "\n")
-  )
+  eq(answer_text(s), "Sending lines 4-6 of intro.lua")
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { "why?" })
   vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
   wait_state(s, "answered")
-  eq(answer_text(s):find("Try:", 1, true), nil, "the first request replaces it")
+  eq(answer_text(s):find("Sending", 1, true), nil, "the first request replaces it")
 end)
 
 test("a command without a range is about the whole file", function()

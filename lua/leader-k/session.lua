@@ -308,7 +308,8 @@ function Session:attachment()
   if self.pending then
     return describe(self.pending)
   end
-  if (self.state == "prompt" and #self.turns == 0) or replaced(self:target()) then
+  -- Before the first request, the transcript names the selection instead.
+  if #self.turns > 0 and replaced(self:target()) then
     return describe(self:target())
   end
 end

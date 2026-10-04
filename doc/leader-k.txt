@@ -11,20 +11,19 @@ USE                                                          *leader-k-use*
 
 Map <leader>k to require("leader-k").open(). In Visual mode it starts on the
 selection; in Normal mode, on the whole file, as a side chat. A panel opens
-on the right of the editor with the selection attached and an input for
-your request. Type a request and press Enter. The model decides how to
-reply:
+on the right of the editor with an input for your request. Type a request
+and press Enter. The model decides how to reply:
 
   A change      A proposed edit, shown inline as a diff. Accepting applies
                 it to the buffer.
   A question    A Markdown answer in the panel. The buffer is not changed.
 
-The panel holds the conversation. Its transcript sits above the input. Before
-the first request, the transcript shows the selected code, up to 12 lines, and
-example requests. A dim divider above the input shows the status, such as
-"+3 -3 Review it in the code.", and the last row of the input box shows the
-keys.
-The code keeps the selection marked and shows a diff when a reply proposes an
+The panel holds the conversation. Its transcript sits above the input.
+Before the first request, the transcript names what it will send, such as
+"Sending lines 20-25 of client.go" or "Sending the whole file: client.go".
+A dim divider above the input shows the status, such as "+3 -3 Review it
+in the code.", and the last row of the input box shows the keys. The code
+keeps the selection marked and shows a diff when a reply proposes an
 edit; focus then moves to the code for review.
 
 During review: Enter accepts, Backspace rejects, <leader>k moves into the
