@@ -17,7 +17,7 @@ You review each edit in the code, file by file, before it applies.
   "sadiksaifi/leader-k.nvim",
   cmd = { "LeaderK", "LeaderKAdd", "LeaderKNew" },
   keys = {
-    { "<leader>k", function() require("leader-k").open() end, mode = { "n", "x" } },
+    { "<leader>k", function() require("leader-k").open() end },
   },
   ---@type leader_k.Config
   opts = {
@@ -90,21 +90,27 @@ opts = {
 `<leader>k` in Normal mode opens the sidebar. Type a request and press
 Enter. With nothing attached, the first message sends the current file.
 
-To send other code, select it and press `<leader>k` in Visual mode. Repeat
-this in any buffer to collect several selections. `:LeaderKAdd [path]`
-attaches a whole file, and `@path` in a message attaches that file. The
-attachments show above the input until you send them.
+To send other code, select it while the sidebar is open. A hint above the
+selection names the attach key, `<leader>k`. Repeat this in any buffer to
+collect several selections. `:LeaderKAdd [path]` attaches a whole file, and
+`@path` in a message attaches that file. The attachments show above the
+input until you send them.
 
 The model reads, lists, and searches files under the project root, the
 nearest directory with `.git`. It proposes edits to any of those files.
 Nothing changes until you accept: the first changed file opens in the code
-with the edit shown inline. Accepting writes the edit into the buffer,
-unsaved; save it with `:w`. `u` undoes it.
+with the edit shown inline, and a hint in the window's bottom right corner
+names the review keys. Accepting writes the edit into the buffer, unsaved;
+save it with `:w`. `u` undoes it.
+
+The attach and review keys exist only while the sidebar is open. Elsewhere
+these keys keep their usual meaning, including your own mappings. Closing
+the sidebar pauses the review; opening it again resumes it.
 
 | Context | Key | Action |
 | --- | --- | --- |
 | Normal | `<leader>k` | Open the sidebar, or move into its input |
-| Visual | `<leader>k` | Attach the selection |
+| Visual, sidebar open | `<leader>k` | Attach the selection |
 | Input | `<CR>` | Send |
 | Input | `<Up>` / `<Down>` | Recall messages |
 | Input, empty | `<BS>` | Remove the newest attachment |

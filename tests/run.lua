@@ -220,6 +220,14 @@ local function feed(keys)
   vim.api.nvim_feedkeys(vim.keycode(keys), "mtx", false)
 end
 
+---The text of a hint float, or nil when it is hidden.
+local function hint_text(h)
+  if not (h.win and vim.api.nvim_win_is_valid(h.win)) then
+    return nil
+  end
+  return vim.trim(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(h.win), 0, 1, false)[1])
+end
+
 local function code_win()
   local S = assert(agent.get())
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
@@ -576,6 +584,66 @@ test("Enter on a changed file opens its review", function()
   eq(vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()), project .. "/b.lua", "focus moves to the code")
 end)
 
+test("a hint in the code window names the review keys", function()
+  script(EDITS)
+  use("script")
+  edit("a.lua")
+  send("annotate")
+  wait_idle()
+  eq(hint_text(review.hint), "1/2 a.lua  Enter accept  Backspace reject  ]f next file")
+  local hwin = review.hint.win
+  local config_ = vim.api.nvim_win_get_config(hwin)
+  eq(config_.relative, "win")
+  eq(config_.win, code_win())
+  vim.api.nvim_set_current_win(code_win())
+  feed("<CR>")
+  eq(hint_text(review.hint), "b.lua  Enter accept  Backspace reject", "the last file has no next file")
+  feed("<BS>")
+  eq(hint_text(review.hint), nil, "no review, no hint")
+end)
+
+test("closing the panel suspends the review; opening it resumes", function()
+  script(EDITS)
+  use("script")
+  local a = edit("a.lua")
+  send("annotate")
+  wait_idle()
+  local S = assert(agent.get())
+  agent.hide()
+  eq(review.current, nil)
+  eq(hint_text(review.hint), nil)
+  eq(#vim.api.nvim_buf_get_extmarks(a, review.ns, 0, -1, {}), 0, "the diff is cleared")
+  vim.api.nvim_set_current_buf(a)
+  feed("<CR>")
+  eq(lines_of(a), SAMPLE, "Enter does not accept with the panel closed")
+  eq(S.changes.list[1].status, "pending")
+  lk.open()
+  vim.cmd.stopinsert()
+  eq(review.current.change.rel, "a.lua", "the review resumes")
+  truthy(hint_text(review.hint))
+end)
+
+test("a run that finishes with the panel closed reviews once it opens", function()
+  script({
+    {
+      delay = 0.05,
+      tool_calls = {
+        { name = "edit_file", arguments = { path = "a.lua", old_string = "return M", new_string = "return M -- x" } },
+      },
+    },
+    { content = "Done." },
+  })
+  use("script")
+  edit("a.lua")
+  send("go")
+  agent.hide()
+  wait_idle()
+  eq(review.current, nil)
+  lk.open()
+  vim.cmd.stopinsert()
+  eq(review.current.change.rel, "a.lua")
+end)
+
 test("a file changed after the edit cannot be accepted", function()
   script(EDITS)
   use("script")
@@ -665,8 +733,10 @@ end)
 test("attachments: selections from two buffers and a file, with Backspace removal", function()
   script({ { content = "Got them." } })
   use("script")
-  vim.keymap.set("x", "<leader>k", lk.open)
   local a = edit("a.lua")
+  agent.open()
+  vim.cmd.stopinsert()
+  vim.api.nvim_set_current_win(code_win())
   feed("4GVj<Space>k")
   eq(vim.fn.mode(), "n", "Visual mode ends")
   eq(vim.api.nvim_get_current_buf(), a, "focus stays in the code")
@@ -719,8 +789,42 @@ test("attachments: selections from two buffers and a file, with Backspace remova
   local reqs = requests()
   local msgs = reqs[#reqs].messages
   eq(msgs[#msgs].content, "and now?")
-  vim.keymap.del("x", "<leader>k")
   eq(lines_of(b)[4], '  return "b"')
+end)
+
+test("the attach key works only while the panel is open, with a hint", function()
+  use("script")
+  local attach = require("leader-k.attach")
+  vim.keymap.set("x", "<leader>k", "<Cmd>let g:lk_user_x = 1<CR>")
+  edit("a.lua")
+  feed("2GV<Space>k")
+  eq(agent.get(), nil, "no panel: no attachment and no conversation")
+  eq(vim.g.lk_user_x, 1, "the user's own mapping ran")
+  vim.g.lk_user_x = nil
+  feed("<Esc>")
+
+  agent.open()
+  vim.cmd.stopinsert()
+  vim.api.nvim_set_current_win(code_win())
+  local shown
+  vim.keymap.set("x", "<F3>", function()
+    shown = hint_text(attach.hint)
+  end)
+  feed("3GVj<F3>")
+  eq(shown, "Leader k attach", "Visual mode shows the hint")
+  feed("<Space>k")
+  eq(hint_text(attach.hint), nil, "the hint closes")
+  eq(#agent.get().attachments, 1)
+  eq(vim.g.lk_user_x, nil, "the panel's key shadowed the user's mapping")
+
+  agent.hide()
+  eq(attach.enabled(), false)
+  feed("4GV<Space>k")
+  eq(vim.g.lk_user_x, 1, "the user's mapping is back once the panel closes")
+  eq(#agent.get().attachments, 1)
+  vim.keymap.del("x", "<F3>")
+  vim.keymap.del("x", "<leader>k")
+  vim.g.lk_user_x = nil
 end)
 
 test("@path in a message attaches the file", function()

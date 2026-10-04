@@ -5,6 +5,7 @@ local M = {}
 ---@field reject string Reject the file under review.
 ---@field cancel string Stop a running request.
 ---@field refine string Move into the panel input.
+---@field attach string In Visual mode, while the panel is open: attach the selection.
 ---@field next_file string
 ---@field prev_file string
 ---@field next_hunk string
@@ -41,6 +42,7 @@ M.defaults = {
     reject = "<BS>",
     cancel = "<C-c>",
     refine = "<leader>k",
+    attach = "<leader>k",
     next_file = "]f",
     prev_file = "[f",
     next_hunk = "]c",

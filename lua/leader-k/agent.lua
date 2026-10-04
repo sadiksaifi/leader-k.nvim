@@ -3,6 +3,7 @@
 -- message, and the staged changes. A message runs the agent loop: stream a
 -- reply, run its tool calls, send the results, until a reply has no calls.
 
+local attach = require("leader-k.attach")
 local changes = require("leader-k.changes")
 local config = require("leader-k.config")
 local context = require("leader-k.context")
@@ -44,6 +45,7 @@ local attach_ns = vim.api.nvim_create_namespace("leader-k.attached")
 ---@field augroup integer
 ---@field confirm_close boolean
 ---@field files string[]|nil Project files for @path completion.
+---@field resume leader_k.Change|nil The file to review once the panel opens.
 
 ---@type leader_k.Conversation|nil
 local S = nil
@@ -209,6 +211,19 @@ function M.review(c, focus)
   if not S or c.status ~= "pending" then
     return
   end
+  -- Review keys work only with the panel open; wait for it.
+  if not panel().is_open(S) then
+    S.resume = c
+    return
+  end
+  S.resume = nil
+  local pending = S.changes:pending()
+  local position
+  for i, x in ipairs(pending) do
+    if x == c and #pending > 1 then
+      position = ("%d/%d"):format(i, #pending)
+    end
+  end
   local win = panel().code_window(S)
   if not win then
     return
@@ -227,7 +242,7 @@ function M.review(c, focus)
     prev_file = function()
       M.step_file(-1)
     end,
-  }, focus)
+  }, focus, position)
   if not ok then
     echo_error(tostring(err))
   end
@@ -892,6 +907,33 @@ function M.new()
   end
   if open then
     M.open()
+  end
+end
+
+---Called when the panel's windows open or close. The attach key and the
+---review keys exist only while they are open; a review in progress
+---resumes when they open again.
+---@param conv leader_k.Conversation
+---@param open boolean
+function M.on_panel(conv, open)
+  if not open then
+    attach.disable()
+    if review.current then
+      if S == conv then
+        conv.resume = review.current.change
+      end
+      review.hide()
+    end
+    return
+  end
+  if S ~= conv then
+    return
+  end
+  attach.enable(function(win)
+    return panel().owns(conv, win)
+  end, M.attach_selection)
+  if conv.resume and conv.resume.status == "pending" and not review.current then
+    M.review(conv.resume, false)
   end
 end
 

@@ -10,16 +10,15 @@ REQUIREMENTS                                        *leader-k-requirements*
 ==============================================================================
 USE                                                          *leader-k-use*
 
-Map <leader>k to require("leader-k").open() in Normal and Visual mode.
+Map <leader>k to require("leader-k").open() in Normal mode. It opens the
+sidebar and moves into its input. Type a request and press Enter. With
+nothing attached, the first message sends the current file.
 
-In Normal mode it opens the sidebar and moves into its input. Type a
-request and press Enter. With nothing attached, the first message sends the
-current file.
-
-In Visual mode it attaches the selection to the next message and stays in
-the code. Repeat it in any buffer to collect several selections. `@path` in
-a message attaches that project file. The attachments show above the input
-until they are sent.
+While the sidebar is open, select code in any buffer. A hint above the
+selection names keys.attach, <leader>k by default. Press it to attach the
+selection to the next message; the cursor stays in the code. Repeat it to
+collect several selections. `@path` in a message attaches that project
+file. The attachments show above the input until they are sent.
 
 The model works in the project root: the nearest directory above the file
 that holds one of `root_markers`, or the current directory. It can read,
@@ -29,12 +28,14 @@ commands.
 
 Edits are proposals. When a reply proposes edits, the first changed file
 opens in the code window with the edit shown inline, and the transcript
-lists every changed file. Accepting writes the edit into the buffer, as one
-undo step, without saving it. A file edited after the proposal cannot be
-accepted; reject it or ask again. The next message tells the model which
-files were accepted and rejected.
+lists every changed file. A hint in the bottom right corner of the code
+window names the review keys. Accepting writes the edit into the buffer,
+as one undo step, without saving it. A file edited after the proposal
+cannot be accepted; reject it or ask again. The next message tells the
+model which files were accepted and rejected.
 
 Closing the sidebar window keeps the conversation; <leader>k reopens it.
+Closing it also pauses the review, and reopening it resumes the review.
 `q` in the sidebar ends the conversation. With edits pending, it asks for a
 second `q`. Errors appear in the transcript and in |:messages|.
 
@@ -108,8 +109,14 @@ While a file is under review, in its buffer:
   keys.next_hunk   ]c     Go to the next change in the file.
   keys.prev_hunk   [c     Go to the previous change in the file.
 
-These keys act only while the file is under review. Elsewhere they keep
-their usual meaning, including your own mappings.
+These keys act only while the file is under review and the sidebar is
+open. Elsewhere they keep their usual meaning, including your own mappings.
+
+In Visual mode, while the sidebar is open:
+  keys.attach      <leader>k   Attach the selection.
+
+The attach key replaces a global Visual-mode mapping of the same key only
+while the sidebar is open, and restores it when the sidebar closes.
 
 In the transcript:
   <CR>             Review the changed file under the cursor.
@@ -143,7 +150,7 @@ HIGHLIGHTS                                             *leader-k-highlights*
   LeaderKBar  LeaderKBarAdd  LeaderKBarDelete  LeaderKSpinner
   LeaderKKey  LeaderKHint  LeaderKCountAdd  LeaderKCountDelete
   LeaderKWarn  LeaderKPlaceholder  LeaderKNote  LeaderKUserBar
-  LeaderKUser  LeaderKUserEdge  LeaderKDivider
+  LeaderKUser  LeaderKUserEdge  LeaderKDivider  LeaderKHintFloat
 
 ==============================================================================
 LIMITS                                                     *leader-k-limits*

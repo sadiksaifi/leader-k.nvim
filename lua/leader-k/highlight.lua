@@ -59,6 +59,7 @@ function M.setup()
   set("LeaderKWarn", { link = "DiagnosticWarn" })
   set("LeaderKPlaceholder", { link = "NonText" })
   set("LeaderKNote", { link = "Comment" })
+  set("LeaderKHintFloat", { link = "NormalFloat" })
 
   -- The user's messages in the panel: an accent bar over a faint tint
   -- of the same hue, so they read as a group apart from the answers, which

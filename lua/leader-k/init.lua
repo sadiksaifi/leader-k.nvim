@@ -27,18 +27,21 @@ local function ensure_setup()
   end
 end
 
----In Visual mode, attaches the selection to the next message and stays in
----the code. In Normal mode, opens the panel and moves into its input.
+---Opens the panel and moves into its input. In Visual mode with the panel
+---open, attaches the selection instead and stays in the code; with the
+---panel closed, the selection is dropped.
 function M.open()
   ensure_setup()
   local agent = require("leader-k.agent")
   local mode = vim.fn.mode()
   if mode == "v" or mode == "V" or mode == "\22" then
     local buf, r0, r1, focus = require("leader-k.context").visual()
-    agent.attach_selection(buf, r0, r1, focus)
-  else
-    agent.open()
+    if require("leader-k.attach").enabled() then
+      agent.attach_selection(buf, r0, r1, focus)
+      return
+    end
   end
+  agent.open()
 end
 
 ---Opens the panel, attaches lines l1..l2 (1-based) when `range` is set,

@@ -227,8 +227,6 @@ local function hints(focused)
   local list
   if focused then
     list = { { "<CR>", "send" }, { "<Up>", "history" }, { "<Esc>", "back to the code" } }
-  elseif review.current then
-    list = { { keys.accept, "accept" }, { keys.reject, "reject" }, { keys.next_file, "next file" } }
   else
     list = { { keys.refine, "type" }, { "q", "close" } }
   end
@@ -569,6 +567,7 @@ function M.close(S)
   end
   local wins = vim.tbl_filter(valid, { p.twin, p.iwin })
   p.twin, p.iwin, p.visible = nil, nil, false
+  agent().on_panel(S, false)
   if p.augroup then
     pcall(vim.api.nvim_del_augroup_by_id, p.augroup)
     p.augroup = nil
@@ -665,11 +664,13 @@ function M.sync(S, show)
     user_rows[buf] = rows
   end
 
+  local opened = false
   if not valid(p.twin) then
     if not p.visible then
       return
     end
     open_windows(S)
+    opened = true
   end
   local twin = p.twin --[[@as integer]]
   local iwin = p.iwin --[[@as integer]]
@@ -695,6 +696,10 @@ function M.sync(S, show)
         end
       end)
     end
+  end
+  if opened then
+    -- The attach and review keys work only while the panel is open.
+    agent().on_panel(S, true)
   end
 end
 

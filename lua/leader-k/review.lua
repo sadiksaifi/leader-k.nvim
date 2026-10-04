@@ -5,6 +5,7 @@
 
 local changes = require("leader-k.changes")
 local config = require("leader-k.config")
+local hint = require("leader-k.hint")
 
 local M = {}
 
@@ -23,9 +24,14 @@ local BAR = "▎"
 ---@field buf integer
 ---@field saved_maps table[]
 ---@field augroup integer
+---@field position string|nil Such as "2/3": the file's place among the files to review.
+---@field stale boolean|nil
 
 ---@type leader_k.Review|nil
 M.current = nil
+
+-- Names the review keys in the corner of the window that shows the file.
+M.hint = hint.new()
 
 ---@param buf integer
 ---@return integer|nil
@@ -479,8 +485,36 @@ local function restore_maps(r)
   end
 end
 
----Ends the review: clears the diff and restores the keys.
+---Shows the review keys in the bottom right corner of the window that shows
+---the file under review, or hides them when no window shows it.
+---@param r leader_k.Review
+local function show_hint(r)
+  local win = window_for(r.buf)
+  if not win then
+    hint.hide(M.hint)
+    return
+  end
+  local keys = config.options.keys
+  local list = r.stale and { { keys.reject, "reject" } } or { { keys.accept, "accept" }, { keys.reject, "reject" } }
+  if r.position then
+    list[#list + 1] = { keys.next_file, "next file" }
+  end
+  if #r.change.hunks > 1 and not r.stale then
+    list[#list + 1] = { keys.next_hunk, "next change" }
+  end
+  local width = vim.api.nvim_win_get_width(win)
+  hint.show(M.hint, list, {
+    relative = "win",
+    win = win,
+    anchor = "SE",
+    row = vim.api.nvim_win_get_height(win),
+    col = width,
+  }, r.position and (r.position .. " " .. r.change.rel) or r.change.rel, width)
+end
+
+---Ends the review: clears the diff, the hint, and restores the keys.
 function M.hide()
+  hint.hide(M.hint)
   local r = M.current
   if not r then
     return
@@ -514,13 +548,14 @@ end
 ---@param c leader_k.Change
 ---@param actions leader_k.ReviewActions
 ---@param focus boolean|nil Move the cursor into `win`.
-function M.show(win, c, actions, focus)
+---@param position string|nil Such as "2/3".
+function M.show(win, c, actions, focus, position)
   M.hide()
   local buf = load(c)
   if vim.api.nvim_win_get_buf(win) ~= buf then
     vim.api.nvim_win_set_buf(win, buf)
   end
-  local r = { change = c, buf = buf, saved_maps = {} } ---@type leader_k.Review
+  local r = { change = c, buf = buf, saved_maps = {}, position = position } ---@type leader_k.Review
   r.augroup = vim.api.nvim_create_augroup("leader-k.review", { clear = true })
   M.current = r
   install_maps(r, actions)
@@ -530,7 +565,19 @@ function M.show(win, c, actions, focus)
     callback = function()
       if M.current == r then
         draw(r)
+        show_hint(r)
       end
+    end,
+  })
+  -- The hint follows the file between windows.
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufWinLeave", "WinResized", "WinClosed" }, {
+    group = r.augroup,
+    callback = function()
+      vim.schedule(function()
+        if M.current == r then
+          show_hint(r)
+        end
+      end)
     end,
   })
   vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
@@ -544,6 +591,7 @@ function M.show(win, c, actions, focus)
   })
   draw(r)
   show_line(r, win, M.hunk_lines(c)[1] or 1)
+  show_hint(r)
   if focus then
     vim.api.nvim_set_current_win(win)
   end
@@ -553,6 +601,7 @@ end
 function M.redraw()
   if M.current then
     draw(M.current)
+    show_hint(M.current)
   end
 end
 
