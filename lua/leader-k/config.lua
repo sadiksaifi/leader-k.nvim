@@ -1,10 +1,16 @@
 local M = {}
 
 ---@class leader_k.Keys
----@field accept string
----@field reject string
----@field cancel string
----@field refine string
+---@field accept string Accept the file under review.
+---@field reject string Reject the file under review.
+---@field cancel string Stop a running request.
+---@field refine string Move into the panel input.
+---@field next_file string
+---@field prev_file string
+---@field next_hunk string
+---@field prev_hunk string
+---@field accept_all string In the panel transcript.
+---@field reject_all string In the panel transcript.
 
 ---@class leader_k.EnvKey
 ---@field env string Name of an environment variable inherited by Neovim.
@@ -14,7 +20,9 @@ local M = {}
 ---@field model string Chat Completions model ID.
 ---@field api_key? string|leader_k.EnvKey Literal key or an explicit environment variable reference.
 ---@field params? table Extra request body fields, merged over the defaults.
----@field context_bytes? integer Most surrounding code sent on each side, in bytes.
+---@field max_read_bytes? integer Most bytes a file read or an attached file sends.
+---@field max_steps? integer Most requests the agent makes for one message.
+---@field root_markers? string[] Files or directories that mark the project root.
 ---@field timeout_ms? integer
 ---@field libcurl? string Explicit path to the libcurl shared library.
 ---@field keys? leader_k.Keys
@@ -23,7 +31,9 @@ local M = {}
 -- from the machine, the model name, or the URL's host.
 M.defaults = {
   params = {},
-  context_bytes = 50000,
+  max_read_bytes = 100000,
+  max_steps = 25,
+  root_markers = { ".git" },
   timeout_ms = 180000,
   libcurl = nil,
   keys = {
@@ -31,11 +41,44 @@ M.defaults = {
     reject = "<BS>",
     cancel = "<C-c>",
     refine = "<leader>k",
+    next_file = "]f",
+    prev_file = "[f",
+    next_hunk = "]c",
+    prev_hunk = "[c",
+    accept_all = "A",
+    reject_all = "R",
   },
 }
 
 ---@type leader_k.Config
 M.options = vim.deepcopy(M.defaults)
+
+---Names a key for hints, such as "Enter", "Ctrl-c" or "Leader k".
+---@param lhs string
+---@return string
+function M.key_label(lhs)
+  local named = {
+    ["<cr>"] = "Enter",
+    ["<bs>"] = "Backspace",
+    ["<esc>"] = "Esc",
+    ["<tab>"] = "Tab",
+    ["<space>"] = "Space",
+    ["<up>"] = "Up",
+    ["<down>"] = "Down",
+  }
+  local lower = lhs:lower()
+  if named[lower] then
+    return named[lower]
+  end
+  local ctrl, rest = lhs:match("^<[Cc]%-(.)>(.*)$")
+  if ctrl then
+    return "Ctrl-" .. ctrl .. (rest ~= "" and " " .. rest or "")
+  end
+  if lower:find("^<leader>") then
+    return "Leader " .. lhs:sub(#"<leader>" + 1)
+  end
+  return lhs
+end
 
 -- Every accepted option. `defaults` cannot list them: a nil default adds no key.
 local known = {
@@ -43,7 +86,9 @@ local known = {
   model = true,
   api_key = true,
   params = true,
-  context_bytes = true,
+  max_read_bytes = true,
+  max_steps = true,
+  root_markers = true,
   timeout_ms = true,
   libcurl = true,
   keys = true,
@@ -77,8 +122,14 @@ function M.endpoint()
   if type(o.params) ~= "table" then
     return nil, "`params` must be a table of request body fields"
   end
-  if type(o.context_bytes) ~= "number" or o.context_bytes < 0 or o.context_bytes % 1 ~= 0 then
-    return nil, "`context_bytes` must be a nonnegative integer"
+  for _, name in ipairs({ "max_read_bytes", "max_steps" }) do
+    local v = o[name]
+    if type(v) ~= "number" or v <= 0 or v % 1 ~= 0 then
+      return nil, ("`%s` must be a positive integer"):format(name)
+    end
+  end
+  if type(o.root_markers) ~= "table" or #o.root_markers == 0 then
+    return nil, "`root_markers` must be a nonempty list of file or directory names"
   end
   if type(o.timeout_ms) ~= "number" or o.timeout_ms <= 0 or o.timeout_ms % 1 ~= 0 then
     return nil, "`timeout_ms` must be a positive integer"
@@ -89,7 +140,7 @@ function M.endpoint()
   if type(o.keys) ~= "table" then
     return nil, "`keys` must be a table of mappings"
   end
-  for _, action in ipairs({ "accept", "reject", "cancel", "refine" }) do
+  for action in pairs(M.defaults.keys) do
     if type(o.keys[action]) ~= "string" or o.keys[action] == "" then
       return nil, ("`keys.%s` must be a nonempty string"):format(action)
     end

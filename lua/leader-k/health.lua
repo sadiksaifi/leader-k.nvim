@@ -26,6 +26,20 @@ function M.check()
     end
   end
 
+  h.start("leader-k: project tools")
+  if vim.fn.executable("git") == 1 then
+    h.ok("git: list_files uses git ls-files, and ignored files stay off limits")
+  else
+    h.warn("git not found: list_files walks directories, and .gitignore is not applied")
+  end
+  if vim.fn.executable("rg") == 1 then
+    h.ok("rg: search uses ripgrep")
+  elseif vim.fn.executable("git") == 1 then
+    h.info("rg not found: search uses git grep, which works only inside git repositories")
+  else
+    h.warn("neither rg nor git found: the search tool is unavailable")
+  end
+
   h.start("leader-k: endpoint")
   h.info("OpenAI-compatible Chat Completions streaming")
   local ep, ep_err = config.endpoint()
