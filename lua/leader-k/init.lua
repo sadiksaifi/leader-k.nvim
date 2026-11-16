@@ -16,40 +16,62 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = group,
     callback = function()
-      require("leader-k.session").stop_all()
+      require("leader-k.agent").stop_all()
     end,
   })
 end
 
----Edits the visual selection, or the current line in Normal mode. When the
----buffer already has a proposal, refines it instead.
-function M.open()
+local function ensure_setup()
   if not did_setup then
     M.setup()
   end
-  local mode = vim.fn.mode()
-  local r0, r1
-  if mode == "v" or mode == "V" or mode == "\22" then
-    local a, b = vim.fn.line("v"), vim.fn.line(".")
-    r0, r1 = math.min(a, b) - 1, math.max(a, b) - 1
-    vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
-  else
-    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
-    r0, r1 = row, row
-  end
-  require("leader-k.session").start(r0, r1)
 end
 
----Starts an edit of lines l1..l2 (1-based), sending `instruction` right away
----when it is not empty. Backs the :LeaderK command.
+---Opens the panel and moves into its input. In Visual mode, it first
+---attaches the selection, as keys.attach does.
+function M.open()
+  ensure_setup()
+  local agent = require("leader-k.agent")
+  local mode = vim.fn.mode()
+  if mode == "v" or mode == "V" or mode == "\22" then
+    agent.attach_selection(require("leader-k.context").visual())
+  end
+  agent.open()
+end
+
+---Opens the panel, attaches lines l1..l2 (1-based) when `range` is set,
+---and sends `request` when it is not empty. Backs :LeaderK.
 ---@param l1 integer
 ---@param l2 integer
----@param instruction string|nil
-function M.edit(l1, l2, instruction)
-  if not did_setup then
-    M.setup()
+---@param request string|nil
+---@param range boolean|nil
+function M.run(l1, l2, request, range)
+  ensure_setup()
+  local agent = require("leader-k.agent")
+  if range then
+    agent.attach_selection(vim.api.nvim_get_current_buf(), l1 - 1, l2 - 1)
   end
-  require("leader-k.session").start(l1 - 1, l2 - 1, instruction)
+  request = vim.trim(request or "")
+  if request == "" then
+    agent.open()
+  else
+    agent.open()
+    vim.cmd.stopinsert()
+    agent.submit(request)
+  end
+end
+
+---Attaches a whole file, the current buffer's by default.
+---@param path string|nil
+function M.add(path)
+  ensure_setup()
+  require("leader-k.agent").attach_file(path)
+end
+
+---Starts a new conversation, discarding pending changes.
+function M.new()
+  ensure_setup()
+  require("leader-k.agent").new()
 end
 
 return M

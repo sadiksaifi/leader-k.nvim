@@ -48,22 +48,33 @@ function M.setup()
     set("LeaderKDeleteText", { link = "DiffText" })
   end
 
-  set("LeaderKSelection", { link = "Visual" })
-  set("LeaderKPending", { link = "NonText" })
   set("LeaderKBar", { link = "NonText" })
   set("LeaderKBarAdd", { link = "Added" })
   set("LeaderKBarDelete", { link = "Removed" })
   set("LeaderKSpinner", { link = "Special" })
-  set("LeaderKStatus", { link = "Normal" })
-  set("LeaderKInstruction", { link = "Comment" })
   set("LeaderKKey", { link = "Special" })
   set("LeaderKHint", { link = "NonText" })
   set("LeaderKCountAdd", { link = "Added" })
   set("LeaderKCountDelete", { link = "Removed" })
   set("LeaderKWarn", { link = "DiagnosticWarn" })
   set("LeaderKPlaceholder", { link = "NonText" })
-  set("LeaderKFooter", { link = "NonText" })
-  set("LeaderKFlash", { link = "LeaderKAdd" })
+  set("LeaderKNote", { link = "Comment" })
+  set("LeaderKHintFloat", { link = "NormalFloat" })
+
+  -- The user's messages in the panel: an accent bar over a faint tint
+  -- of the same hue, so they read as a group apart from the answers, which
+  -- keep the plain background and full contrast.
+  set("LeaderKUserBar", { link = "Function" })
+  local normal, accent = get("Normal"), get("LeaderKUserBar")
+  if normal.bg and accent.fg then
+    set("LeaderKUser", { bg = blend(normal.bg, accent.fg, 0.2) })
+  else
+    set("LeaderKUser", { link = "CursorLine" })
+  end
+  -- The bar itself sits on the tint.
+  set("LeaderKUserEdge", { fg = accent.fg, bg = get("LeaderKUser").bg })
+  -- The divider above the panel input: dim, on the panel's background.
+  set("LeaderKDivider", { fg = get("NonText").fg, bg = normal.bg })
 end
 
 return M
